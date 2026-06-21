@@ -97,16 +97,22 @@ After integration, users can simply say "Open Excel and create a sales spreadshe
 ## 5. Quick Start
 
 ```bash
-# 1. Ensure Ollama is running
-ollama serve
+# 1. Install uv
+pip install uv
 
-# 2. Pull a vision model (recommended: qwen3.6:latest, 36B MoE, native vision/tools/thinking support)
-ollama pull qwen3.6:latest
-
-# 3. Install dependencies (uses uv — no poetry, no manual venv setup)
+# 2. Clone and install dependencies
 git clone https://github.com/Region-AI/region-cua.git
 cd region-cua
 uv sync
+
+# 3. Start the backend (choose one)
+
+# Option A: Ollama (default)
+ollama serve
+ollama pull qwen3.6:latest
+
+# Option B: vLLM (OpenAI-compatible API)
+vllm serve qwen3.6:latest --port 8000
 
 # 4. Run
 uv run region-cua run "Open Calculator and compute 1024 times 768"
@@ -170,7 +176,19 @@ uv run region-cua run "Describe current desktop" --model minicpm-v
 uv run region-cua run "Draw a circle in Paint" --no-video
 ```
 
-### 6.8 Allow Screen Lock During Tasks
+### 6.8 Specify Backend Provider
+
+Default is Ollama. Switch to vLLM via environment variable or `--provider` flag:
+
+```bash
+# Environment variable (global)
+export PROVIDER=vllm
+
+# Or per-command
+uv run region-cua run "Open Excel" --provider vllm
+```
+
+### 6.9 Allow Screen Lock During Tasks
 
 By default, RegionCUA prevents the system from locking or sleeping during task execution (Windows uses `SetThreadExecutionState`, Linux uses `systemd-inhibit`, macOS uses `caffeinate`). This is because a locked screen means the desktop agent cannot capture screen content. To explicitly allow screen lock:
 
@@ -178,10 +196,10 @@ By default, RegionCUA prevents the system from locking or sleeping during task e
 uv run region-cua run "..." --allow-lock
 ```
 
-### 6.9 Management Commands
+### 6.10 Management Commands
 
 ```bash
-uv run region-cua list-models    # List available Ollama models
+uv run region-cua list-models    # List available models (supports --provider)
 uv run region-cua info           # View configuration
 ```
 
@@ -239,9 +257,9 @@ outputs/{timestamp}_compile_{app_name}/
 |-----------|-------------|
 | Python 3.11+ | Runtime environment |
 | uv | Dependency management & runner (`pip install uv`) |
-| Ollama | Local vision model inference engine |
+| Ollama **or** vLLM | Local vision model inference engine (choose one) |
 | Windows 10/11 | Currently supported desktop platform |
-| Qwen3.6:latest (recommended) | 36B MoE model; planning and vision share one model to avoid 30s+ cold-start latency from Ollama model switching |
+| Qwen3.6:latest (recommended) | 36B MoE model; planning and vision share one model to avoid 30s+ cold-start latency from model switching |
 
 ### Risks & Mitigations
 

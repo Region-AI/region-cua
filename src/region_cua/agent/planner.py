@@ -12,7 +12,7 @@ import json
 import re
 from typing import Any
 
-from ..vision.ollama_client import OllamaClient
+from ..vision.protocol import VisionClient
 from .models import Step, TaskPlan, VALID_ACTIONS
 
 PLANNER_SYSTEM = """你是一个 Windows 桌面自动化任务规划器。
@@ -73,7 +73,7 @@ def _clean(value: Any) -> Any:
 
 
 class TaskPlanner:
-    def __init__(self, client: OllamaClient, model: str):
+    def __init__(self, client: VisionClient, model: str):
         self.client = client
         self.model = model
 

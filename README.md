@@ -99,16 +99,22 @@ Agent 集成后，用户只需说"帮我打开 Excel 创建一个销售表格"�
 ## 5. 快速开始
 
 ```bash
-# 1. 确保 Ollama 已启动
-ollama serve
+# 1. 安装 uv
+pip install uv
 
-# 2. 安装视觉模型（推荐 qwen3.6:latest，36B MoE，原生支持 vision/tools/thinking）
+# 2. 克隆并安装依赖
+git clone https://github.com/Region-AI/region-cua.git
+cd region-cua
+uv sync
+
+# 3. 启动后端（二选一）
+
+# 选项 A：Ollama（默认）
+ollama serve
 ollama pull qwen3.6:latest
 
-# 3. 安装依赖（使用 uv，无需 poetry / 无需手动建虚拟环境）
-git clone <repo>
-cd RegionCUA
-uv sync
+# 选项 B：vLLM（OpenAI 兼容 API）
+vllm serve qwen3.6:latest --port 8000
 
 # 4. 运行
 uv run region-cua run "打开计算器，计算 1024 乘以 768"
@@ -172,7 +178,19 @@ uv run region-cua run "描述当前桌面" --model minicpm-v
 uv run region-cua run "打开画图工具画一个圆" --no-video
 ```
 
-### 6.8 允许任务期间锁屏
+### 6.8 指定后端提供者
+
+默认使用 Ollama，可通过环境变量或 `--provider` 切换为 vLLM：
+
+```bash
+# 环境变量切换（全局生效）
+export PROVIDER=vllm
+
+# 或单次命令切换
+uv run region-cua run "打开 Excel" --provider vllm
+```
+
+### 6.9 允许任务期间锁屏
 
 默认情况下任务执行期间会阻止系统进入锁屏/睡眠（Windows 走 `SetThreadExecutionState`、Linux 走 `systemd-inhibit`、macOS 走 `caffeinate`），因为锁屏后所有桌面 agent 都拿不到屏幕内容（截图只会拿到锁屏画面）。如需明确允许锁屏：
 
@@ -180,7 +198,7 @@ uv run region-cua run "打开画图工具画一个圆" --no-video
 uv run region-cua run "..." --allow-lock
 ```
 
-### 6.9 管理命令
+### 6.10 管理命令
 
 ```bash
 uv run region-cua list-models    # 列出可用 Ollama 模型
@@ -241,9 +259,9 @@ outputs/{时间戳}_编译_{app名}/
 |------|------|
 | Python 3.11+ | 运行环境 |
 | uv | 依赖管理与运行（`pip install uv`，无需 poetry）|
-| Ollama | 本地视觉模型推理引擎 |
+| Ollama **或** vLLM | 本地视觉模型推理引擎（二选一）|
 | Windows 10/11 | 当前支持的桌面平台 |
-| Qwen3.6:latest (推荐) | 36B MoE 模型，规划与视觉同时使用一个模型，避免 Ollama 在多模型间反复切换导致 30+ 秒冷加载延迟 |
+| Qwen3.6:latest (推荐) | 36B MoE 模型，规划与视觉同时使用一个模型，避免在多模型间反复切换导致 30+ 秒冷加载延迟 |
 
 ### 风险与缓解
 

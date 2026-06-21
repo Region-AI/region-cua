@@ -19,15 +19,25 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # 后端提供者：ollama / vllm
+    provider: str = "ollama"
+
+    # --- Ollama ---
     ollama_host: str = "http://localhost:11434"
     # 规划与视觉默认使用同一个模型，避免 Ollama 在两个模型之间反复
     # 切换（每次切换需要重新加载到 VRAM，开销 30+ 秒）。
     # qwen3.6:latest 是 36B MoE，原生支持 vision + tools + thinking。
     ollama_planner_model: str = "qwen3.6:latest"
     ollama_vision_model: str = "qwen3.6:latest"
+    ollama_timeout: int = 600
+
+    # --- vLLM ---
+    vllm_host: str = "http://localhost:8000"
+    vllm_model: str = "qwen3.6:latest"
+
+    # --- 通用 ---
     output_dir: str = "outputs"
     max_consecutive_failures: int = 3
-    ollama_timeout: int = 600
     video_fps: int = 5
 
     @property

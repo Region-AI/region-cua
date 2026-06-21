@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .vision.ollama_client import OllamaClient
+from .vision.protocol import VisionClient
 
 
 # --------------------------------------------------------------------- web
@@ -37,7 +37,7 @@ def search_background(app: str) -> str:
 
 # ------------------------------------------------------------------ explore
 def explore_app(
-    client: OllamaClient,
+    client: VisionClient,
     vision_model: str,
     app: str,
     task_dir: Path,
@@ -110,7 +110,7 @@ def explore_app(
     return task_dir
 
 
-def _describe(client: OllamaClient, model: str, image: str, prompt: str) -> str:
+def _describe(client: VisionClient, model: str, image: str, prompt: str) -> str:
     try:
         return client.chat(model, [{"role": "user", "content": prompt}], images=[image])
     except Exception as exc:
@@ -166,7 +166,7 @@ def _read_document(path: Path) -> str:
 
 
 def compile_skill(
-    client: OllamaClient,
+    client: VisionClient,
     planner_model: str,
     doc_path: str,
     app: str,

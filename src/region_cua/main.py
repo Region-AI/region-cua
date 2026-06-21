@@ -1,7 +1,7 @@
 """RegionCUA CLI 入口。
 
 命令：
-  region-cua run "任务" [--dry-run] [--model X] [--no-video]
+  region-cua run "任务" [--dry-run] [--model X] [--provider ollama|vllm] [--no-video]
   region-cua explore "应用名" [--no-video]
   region-cua compile "文档路径" --app "应用名"
   region-cua list-models
@@ -27,11 +27,11 @@ from .config import Settings, get_settings
 from .explore import compile_skill, explore_app
 from .output.docs import generate_doc
 from .output.scripts import generate_script
-from .vision.ollama_client import OllamaClient
+from .vision import create_vision_client
 
 app = typer.Typer(
     name="region-cua",
-    help="本地 Ollama 视觉模型驱动的桌面自动化 Agent",
+    help="本地视觉模型驱动的桌面自动化 Agent（支持 Ollama / vLLM）",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -64,6 +64,13 @@ def _print_plan(plan: TaskPlan) -> None:
     console.print(table)
 
 
+def _resolve_settings(provider: Optional[str]) -> Settings:
+    s = get_settings()
+    if provider:
+        s.provider = provider
+    return s
+
+
 # ----------------------------------------------------------- core run logic
 def run_task(
     task: str,
@@ -83,10 +90,13 @@ def run_task(
     成功失败异常路径下都尽力落盘。
     """
     settings = settings or get_settings()
-    client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
-    vision_model = model or settings.ollama_vision_model
+    client = create_vision_client(settings)
+    vision_model = model or (
+        settings.ollama_vision_model if settings.provider == "ollama" else settings.vllm_model
+    )
+    planner_model = settings.ollama_planner_model if settings.provider == "ollama" else settings.vllm_model
 
-    planner = TaskPlanner(client, settings.ollama_planner_model)
+    planner = TaskPlanner(client, planner_model)
     plan = planner.plan(task)
 
     if dry_run:
@@ -119,6 +129,10 @@ def run(
     task: str = typer.Argument(..., help="自然语言任务描述"),
     dry_run: bool = typer.Option(False, "--dry-run", help="仅生成计划，不执行"),
     model: str = typer.Option(None, "--model", help="覆盖视觉模型"),
+    provider: str = typer.Option(
+        None, "--provider",
+        help="后端提供者：ollama（默认）或 vllm",
+    ),
     no_video: bool = typer.Option(False, "--no-video", help="不录屏（默认录制 MP4，成功失败都保存）"),
     no_log: bool = typer.Option(False, "--no-log", help="不写操作日志（默认实时写 operation.log）"),
     allow_lock: bool = typer.Option(
@@ -127,9 +141,11 @@ def run(
     ),
 ):
     """执行一个桌面自动化任务。"""
-    settings = get_settings()
-    vision_model = model or settings.ollama_vision_model
-    console.print(f"[dim]规划模型：{settings.ollama_planner_model} | 视觉模型：{vision_model}[/dim]")
+    settings = _resolve_settings(provider)
+    vision_model = model or (
+        settings.ollama_vision_model if settings.provider == "ollama" else settings.vllm_model
+    )
+    console.print(f"[dim]提供者：{settings.provider} | 视觉模型：{vision_model}[/dim]")
 
     with console.status("[bold green]正在规划任务…[/bold green]"):
         plan, _records, _ = run_task(task, settings, dry_run=True, model=model)
@@ -160,14 +176,21 @@ def run(
 def explore(
     app_name: str = typer.Argument(..., help="要探索的应用名"),
     no_video: bool = typer.Option(False, "--no-video", help="不录屏"),
+    provider: str = typer.Option(
+        None, "--provider",
+        help="后端提供者：ollama（默认）或 vllm",
+    ),
 ):
     """自由探索模式：全面摸索应用并生成说明书 + Skill。"""
-    settings = get_settings()
-    client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
+    settings = _resolve_settings(provider)
+    client = create_vision_client(settings)
+    vision_model = (
+        settings.ollama_vision_model if settings.provider == "ollama" else settings.vllm_model
+    )
     task_dir = _new_task_dir(settings, "探索", app_name)
     console.print(f"[dim]输出目录：{task_dir}[/dim]")
     with console.status("[bold green]正在探索应用…[/bold green]"):
-        explore_app(client, settings.ollama_vision_model, app_name, task_dir, record_video=not no_video)
+        explore_app(client, vision_model, app_name, task_dir, record_video=not no_video)
     client.close()
     console.print("\n[bold green]探索完成。[/bold green]")
     console.print(f"  说明文档：{task_dir / '使用说明.md'}")
@@ -178,37 +201,61 @@ def explore(
 def compile(
     doc: str = typer.Argument(..., help="说明文档路径 (md/txt/html/pdf)"),
     app_name: str = typer.Option(..., "--app", help="应用名"),
+    provider: str = typer.Option(
+        None, "--provider",
+        help="后端提供者：ollama（默认）或 vllm",
+    ),
 ):
     """Skill 编译：把已有说明文档编译为操作 Skill。"""
-    settings = get_settings()
-    client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
+    settings = _resolve_settings(provider)
+    client = create_vision_client(settings)
+    planner_model = (
+        settings.ollama_planner_model if settings.provider == "ollama" else settings.vllm_model
+    )
     task_dir = _new_task_dir(settings, "编译", app_name)
     with console.status("[bold green]正在编译 Skill…[/bold green]"):
-        skill_dir = compile_skill(client, settings.ollama_planner_model, doc, app_name, task_dir)
+        skill_dir = compile_skill(client, planner_model, doc, app_name, task_dir)
     client.close()
     console.print(f"\n[bold green]编译完成：[/bold green]{skill_dir / 'SKILL.md'}")
 
 
 @app.command(name="list-models")
-def list_models():
-    """列出 Ollama 可用模型。"""
-    settings = get_settings()
-    client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
+def list_models(
+    provider: str = typer.Option(
+        None, "--provider",
+        help="后端提供者：ollama（默认）或 vllm",
+    ),
+):
+    """列出后端可用模型。"""
+    settings = _resolve_settings(provider)
+    client = create_vision_client(settings)
     try:
         models = client.list_models()
     except Exception as exc:
-        console.print(f"[red]获取模型失败：{exc}[/red]")
+        console.print(f"[red]获取模型列表失败：{exc}[/red]")
         raise typer.Exit(1)
-    table = Table(title="Ollama 模型", show_header=True, header_style="bold magenta")
-    table.add_column("名称")
-    table.add_column("大小", justify="right")
-    table.add_column("修改时间")
-    for m in models:
-        table.add_row(m.get("name", ""), _fmt_size(m.get("size")), m.get("modified", ""))
-    console.print(table)
-    loaded = client.loaded_models()
-    if loaded:
-        console.print("[dim]已驻留 VRAM：[/dim]" + ", ".join(m.get("name", "") for m in loaded))
+
+    if hasattr(client, "loaded_models") and callable(client.loaded_models):
+        label = f"{settings.provider} 模型"
+        table = Table(title=label, show_header=True, header_style="bold magenta")
+        table.add_column("名称")
+        table.add_column("大小", justify="right")
+        table.add_column("修改时间")
+        for m in models:
+            table.add_row(m.get("name", ""), _fmt_size(m.get("size")), m.get("modified", ""))
+        console.print(table)
+        loaded = client.loaded_models()
+        if loaded:
+            console.print("[dim]已驻留 VRAM：[/dim]" + ", ".join(m.get("name", "") for m in loaded))
+    else:
+        # vLLM 的 /v1/models 返回格式不同
+        label = f"{settings.provider} 模型"
+        table = Table(title=label, show_header=True, header_style="bold magenta")
+        table.add_column("ID")
+        table.add_column("对象")
+        for m in models:
+            table.add_row(m.get("id", ""), m.get("object", ""))
+        console.print(table)
     client.close()
 
 
@@ -219,12 +266,15 @@ def info():
     table = Table(title="RegionCUA 配置", show_header=False)
     table.add_column("项", style="bold cyan")
     table.add_column("值")
+    table.add_row("provider", s.provider)
     table.add_row("ollama_host", s.ollama_host)
     table.add_row("ollama_planner_model", s.ollama_planner_model)
     table.add_row("ollama_vision_model", s.ollama_vision_model)
+    table.add_row("ollama_timeout", f"{s.ollama_timeout}s")
+    table.add_row("vllm_host", s.vllm_host)
+    table.add_row("vllm_model", s.vllm_model)
     table.add_row("output_dir", s.output_dir)
     table.add_row("max_consecutive_failures", str(s.max_consecutive_failures))
-    table.add_row("ollama_timeout", f"{s.ollama_timeout}s")
     table.add_row("video_fps", str(s.video_fps))
     console.print(table)
 

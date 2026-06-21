@@ -25,7 +25,7 @@ from typing import Optional
 
 from ..automation import appfinder, input as inp
 from ..vision import screenshot as shot
-from ..vision.ollama_client import OllamaClient
+from ..vision.protocol import VisionClient
 from .models import Step, StepRecord, TaskPlan
 from .monitor import Monitor
 
@@ -33,7 +33,7 @@ from .monitor import Monitor
 class TaskExecutor:
     def __init__(
         self,
-        client: OllamaClient,
+        client: VisionClient,
         vision_model: str,
         task_dir: Path,
         monitor: Monitor,
