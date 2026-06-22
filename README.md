@@ -88,13 +88,39 @@ Skill 编译（基础）
 
 ### 4.3 AI Agent 集成
 
-RegionCUA 提供 `region-cua` Skill，可接入主流 AI Agent 通过自然语言对话直接执行桌面自动化任务：
+RegionCUA 提供一个 `region-cua` Skill，Agent 读取本仓库后会自动识别并安装，安装后可通过自然语言对话直接执行桌面自动化任务：
 
-- **opencode / openclaw** — 安装 `region-cua` skill 后，通过对话即可让 Agent 调用 RegionCUA 操作桌面
-- **hermes** — 通过自然语言描述任务，Hermes 自动编排 RegionCUA 执行步骤
-- 支持 `run`、`--dry-run` 预览、`--model` 指定模型等全部 CLI 能力
+| Agent | 安装方式 | 对话示例 |
+|-------|---------|---------|
+| **opencode** | `opencode .` 后自动识别 skill 配置 | "帮我打开 Excel 创建销售表格" |
+| **openclaw** | 读取 README 后自动安装 skill | "帮我打开计算器计算 1024x768" |
+| **hermes** | 注册 region-cua 工具后使用 | "探索一下 Notepad++ 的功能" |
 
-Agent 集成后，用户只需说"帮我打开 Excel 创建一个销售表格"，Agent 即可自动调用 RegionCUA 完成操作。
+Agent 安装后，用户只需用自然语言描述任务，Agent 自动调用 RegionCUA 完成操作并返回结果。
+
+### 4.4 Skill 自动安装清单
+
+以下元数据供 Agent 自动发现和注册 RegionCUA：
+
+```yaml
+# opencode / openclaw / hermes 自动安装用
+name: region-cua
+description: 桌面自动化 Agent，通过视觉模型操控 Windows 应用
+version: 0.1.0
+commands:
+  run: uv run region-cua run
+  explore: uv run region-cua explore
+  compile: uv run region-cua compile
+  list-models: uv run region-cua list-models
+  info: uv run region-cua info
+install:
+  windows: |
+    pip install uv
+    git clone https://github.com/Region-AI/region-cua.git
+    cd region-cua
+    uv sync
+  model: ollama pull qwen3.6:latest
+```
 
 ## 5. 快速开始
 

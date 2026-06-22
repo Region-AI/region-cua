@@ -86,13 +86,39 @@ Post-exploration:
 
 ### 4.3 AI Agent Integration
 
-RegionCUA provides a `region-cua` Skill that can be integrated into mainstream AI agents to execute desktop automation through natural language conversation:
+RegionCUA provides a `region-cua` Skill. Agents auto-detect and install it when reading this repository, after which they can execute desktop automation through natural language conversation:
 
-- **opencode / openclaw** — Install the `region-cua` skill, then have the agent invoke RegionCUA to control the desktop via dialogue
-- **hermes** — Describe the task in natural language, Hermes automatically orchestrates RegionCUA execution steps
-- Supports all CLI capabilities: `run`, `--dry-run` preview, `--model` selection, etc.
+| Agent | Installation | Example Dialogue |
+|-------|-------------|-----------------|
+| **opencode** | Auto-detects skill config on `opencode .` | "Open Excel and create a sales spreadsheet" |
+| **openclaw** | Auto-installs skill from README | "Open Calculator and compute 1024x768" |
+| **hermes** | Register the region-cua tool | "Explore Notepad++ features" |
 
-After integration, users can simply say "Open Excel and create a sales spreadsheet" and the agent will automatically invoke RegionCUA to complete the operation.
+After installation, users describe tasks in natural language and the agent automatically invokes RegionCUA to complete them.
+
+### 4.4 Skill Auto-Install Manifest
+
+The following metadata is used by agents for auto-discovery and registration:
+
+```yaml
+# opencode / openclaw / hermes auto-install manifest
+name: region-cua
+description: Desktop automation agent powered by local vision models
+version: 0.1.0
+commands:
+  run: uv run region-cua run
+  explore: uv run region-cua explore
+  compile: uv run region-cua compile
+  list-models: uv run region-cua list-models
+  info: uv run region-cua info
+install:
+  windows: |
+    pip install uv
+    git clone https://github.com/Region-AI/region-cua.git
+    cd region-cua
+    uv sync
+  model: ollama pull qwen3.6:latest
+```
 
 ## 5. Quick Start
 
