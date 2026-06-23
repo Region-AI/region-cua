@@ -25,6 +25,7 @@ from .agent.monitor import Monitor
 from .agent.planner import TaskPlanner
 from .config import Settings, get_settings
 from .explore import compile_skill, explore_app
+from .learn import learn_from_video, record_screen, LearnResult
 from .output.docs import generate_doc
 from .output.scripts import generate_script
 from .vision import create_vision_client
@@ -217,6 +218,88 @@ def compile(
         skill_dir = compile_skill(client, planner_model, doc, app_name, task_dir)
     client.close()
     console.print(f"\n[bold green]编译完成：[/bold green]{skill_dir / 'SKILL.md'}")
+
+
+@app.command()
+def learn(
+    video: str = typer.Argument(
+        None, help="录屏视频文件路径（不提供则实时录屏）",
+    ),
+    record: bool = typer.Option(
+        False, "--record",
+        help="实时录屏模式：按 Ctrl+C 结束录屏后自动分析",
+    ),
+    apps: str = typer.Option(
+        None, "--apps",
+        help="涉及的应用名（逗号分隔，提升识别准确率）",
+    ),
+    replay_doc: bool = typer.Option(
+        False, "--replay-doc",
+        help="同时生成操作回放文档",
+    ),
+    verify: bool = typer.Option(
+        True, "--verify/--no-verify",
+        help="生成 Skill 后自动执行验证任务",
+    ),
+    provider: str = typer.Option(
+        None, "--provider",
+        help="后端提供者：ollama（默认）或 vllm",
+    ),
+):
+    """学习模式：从录屏视频学习操作并生成语义化 Skill。"""
+    settings = _resolve_settings(provider)
+    client = create_vision_client(settings)
+    vision_model = (
+        settings.ollama_vision_model if settings.provider == "ollama" else settings.vllm_model
+    )
+    app_list = [a.strip() for a in (apps or "").split(",") if a.strip()]
+
+    # 确定视频来源
+    video_path: Optional[Path] = None
+    if record:
+        task_dir = _new_task_dir(settings, "学习", "实时录屏")
+        console.print(f"[dim]输出目录：{task_dir}[/dim]")
+        console.print("[bold yellow]录屏中…按 Ctrl+C 结束录屏[/bold yellow]")
+        video_file = task_dir / "recordings" / "recording.mp4"
+        try:
+            video_path = record_screen(video_file, fps=settings.video_fps)
+        except RuntimeError as exc:
+            console.print(f"[red]录屏失败：{exc}[/red]")
+            client.close()
+            raise typer.Exit(1)
+        console.print(f"[green]录屏已保存：{video_path}[/green]")
+    elif video:
+        video_path = Path(video)
+        if not video_path.exists():
+            console.print(f"[red]视频文件不存在：{video_path}[/red]")
+            client.close()
+            raise typer.Exit(1)
+        label = video_path.stem
+        task_dir = _new_task_dir(settings, "学习", label)
+        console.print(f"[dim]输出目录：{task_dir}[/dim]")
+    else:
+        console.print("[red]请提供视频文件路径或使用 --record 实时录屏[/red]")
+        client.close()
+        raise typer.Exit(1)
+
+    # 学习：分析视频 → 标注 → 识别变量 → 生成 Skill → 验证
+    with console.status("[bold green]正在分析视频并生成 Skill…[/bold green]"):
+        result: LearnResult = learn_from_video(
+            client, vision_model, video_path, task_dir,
+            apps_hint=app_list, do_verify=verify,
+        )
+
+    console.print(f"\n[bold green]学习完成。[/bold green]")
+    console.print(f"  Skill：{result.skill_path}")
+    console.print(f"  步骤数：{len(result.actions)}")
+    if result.variables:
+        console.print(f"  变量：{', '.join(v.get('name', '') for v in result.variables)}")
+    if result.apps_detected:
+        console.print(f"  涉及应用：{', '.join(result.apps_detected)}")
+    if result.verify_result:
+        console.print(f"  验证：{result.verify_result.splitlines()[0] if result.verify_result else '跳过'}")
+
+    client.close()
 
 
 @app.command(name="list-models")
