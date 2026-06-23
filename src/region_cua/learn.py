@@ -184,17 +184,15 @@ def annotate_actions(
     client: VisionClient,
     model: str,
     actions: list[DetectedAction],
-    apps_hint: list[str] | None = None,
 ) -> tuple[list[DetectedAction], list[str]]:
     """用视觉模型为每个操作填充语义描述，并识别涉及的应用。
 
     返回 (更新后的 actions, 检测到的应用列表)。
     """
     apps_set: set[str] = set()
-    apps_hint = apps_hint or []
 
     for i, action in enumerate(actions):
-        prompt = _build_annotation_prompt(action, apps_hint, i, len(actions))
+        prompt = _build_annotation_prompt(action, i, len(actions))
         try:
             text = client.chat(
                 model,
@@ -216,12 +214,10 @@ def annotate_actions(
 
 
 def _build_annotation_prompt(
-    action: DetectedAction, apps_hint: list[str], index: int, total: int
+    action: DetectedAction, index: int, total: int
 ) -> str:
-    apps_str = "、".join(apps_hint) if apps_hint else "未知"
     return (
         f"这是录屏第 {index + 1}/{total} 步操作的关键帧截图（操作类型初判: {action.action_type}）。\n"
-        f"已知可能涉及的应用: {apps_str}。\n"
         "请分析截图，返回严格 JSON：\n"
         "{\n"
         '  "description": "用语义化语言描述这一步操作，如「点击文件菜单」「在搜索框输入关键词」",\n'
@@ -529,7 +525,6 @@ def learn_from_video(
     model: str,
     video_path: Path,
     task_dir: Path,
-    apps_hint: list[str] | None = None,
     do_verify: bool = True,
 ) -> LearnResult:
     """完整学习流程：分析视频 → 标注操作 → 识别变量 → 生成 Skill → 验证。
@@ -539,7 +534,6 @@ def learn_from_video(
         model: 模型名
         video_path: 录屏视频路径
         task_dir: 输出目录
-        apps_hint: 用户指定的应用名提示
         do_verify: 是否执行验证
     """
     task_dir = Path(task_dir)
@@ -555,7 +549,7 @@ def learn_from_video(
 
     # 2. 视觉标注
     print("  [2/5] 视觉模型标注操作语义...")
-    actions, apps = annotate_actions(client, model, actions, apps_hint)
+    actions, apps = annotate_actions(client, model, actions)
     print(f"        识别到应用: {', '.join(apps) if apps else '未知'}")
 
     # 3. 识别变量

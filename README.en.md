@@ -214,9 +214,6 @@ uv run region-cua learn "recordings/my_operation.mp4"
 # Live recording (press Ctrl+C to stop, auto-analyzes after)
 uv run region-cua learn --record
 
-# Specify involved apps (improves recognition accuracy)
-uv run region-cua learn "recordings/demo.mp4" --apps "Excel,Chrome,Notepad"
-
 # Also generate a replay document
 uv run region-cua learn "recordings/demo.mp4" --replay-doc
 ```

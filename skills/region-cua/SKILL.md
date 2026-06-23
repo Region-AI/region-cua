@@ -73,12 +73,9 @@ uv run region-cua learn "recordings/my_operation.mp4"
 
 # 实时录屏学习（按 Ctrl+C 结束后自动分析）
 uv run region-cua learn --record
-
-# 指定涉及的应用（提升识别准确率）
-uv run region-cua learn "recordings/demo.mp4" --apps "Excel,Chrome,Notepad"
 ```
 
-从录屏视频学习操作并生成语义化 Skill。生成的 Skill 不依赖桌面分辨率、窗口位置/大小和应用版本，支持多应用协同工作流。
+从录屏视频学习操作并生成语义化 Skill。视频是唯一信息来源，自动识别涉及的应用和操作意图，生成的 Skill 不依赖桌面分辨率、窗口位置/大小和应用版本，支持多应用协同工作流。
 
 ### 管理
 
@@ -95,7 +92,7 @@ uv run region-cua info            # 查看配置
 | "在 Excel 里创建一个销售表格" | `uv run region-cua run "打开 Excel 创建销售表格"` |
 | "探索一下 Notepad++ 的功能" | `uv run region-cua explore "Notepad++"` |
 | "把这个操作手册编译成 Skill" | `uv run region-cua compile "manual.pdf" --app "ERP系统"` |
-| "学习这个操作视频生成 Skill" | `uv run region-cua learn "demo.mp4" --apps "Excel,Chrome"` |
+| "学习这个操作视频生成 Skill" | `uv run region-cua learn "demo.mp4"` |
 | "录屏学习我的操作" | `uv run region-cua learn --record` |
 
 ## 工作流

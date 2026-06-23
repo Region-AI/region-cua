@@ -216,9 +216,6 @@ uv run region-cua learn "recordings/my_operation.mp4"
 # 实时录屏学习（按 Ctrl+C 结束录屏后自动分析）
 uv run region-cua learn --record
 
-# 指定涉及的应用（提升识别准确率）
-uv run region-cua learn "recordings/demo.mp4" --apps "Excel,Chrome,Notepad"
-
 # 生成时同时输出操作回放文档
 uv run region-cua learn "recordings/demo.mp4" --replay-doc
 ```

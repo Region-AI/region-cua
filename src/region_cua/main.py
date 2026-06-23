@@ -223,15 +223,11 @@ def compile(
 @app.command()
 def learn(
     video: str = typer.Argument(
-        None, help="录屏视频文件路径（不提供则实时录屏）",
+        None, help="录屏视频文件路径（不提供则用 --record 实时录屏）",
     ),
     record: bool = typer.Option(
         False, "--record",
         help="实时录屏模式：按 Ctrl+C 结束录屏后自动分析",
-    ),
-    apps: str = typer.Option(
-        None, "--apps",
-        help="涉及的应用名（逗号分隔，提升识别准确率）",
     ),
     replay_doc: bool = typer.Option(
         False, "--replay-doc",
@@ -252,7 +248,6 @@ def learn(
     vision_model = (
         settings.ollama_vision_model if settings.provider == "ollama" else settings.vllm_model
     )
-    app_list = [a.strip() for a in (apps or "").split(",") if a.strip()]
 
     # 确定视频来源
     video_path: Optional[Path] = None
@@ -286,7 +281,7 @@ def learn(
     with console.status("[bold green]正在分析视频并生成 Skill…[/bold green]"):
         result: LearnResult = learn_from_video(
             client, vision_model, video_path, task_dir,
-            apps_hint=app_list, do_verify=verify,
+            do_verify=verify,
         )
 
     console.print(f"\n[bold green]学习完成。[/bold green]")
