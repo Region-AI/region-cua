@@ -40,19 +40,20 @@ RegionCUA 是一个由本地 Ollama 视觉模型驱动的桌面自动化 Agent�
                               (本地视觉模型分析截图)
 ```
 
-### 4.2 三级能力模型
+### 4.2 四级能力模型
 
-RegionCUA 提供三个递进的能力层次，底层能力向上支撑：
+RegionCUA 提供四个能力层次，Skill 生成是基础，任务执行与自由探索在其上运作：
 
 ```
-Skill 编译（基础）
-  ├─ 有说明书 → 编译为 Skill
-  └─ 无说明书 → 探索后生成说明书 → 编译为 Skill
-                    │
+Skill 生成（基础）
+  ├─ 文档编译  — 有说明书 → 编译为 Skill
+  ├─ 视频学习  — 录屏操作视频 → 识别意图 → 生成 Skill
+  └─ 自由探索  — 无说明书 → 探索后生成说明书 → 编译为 Skill
+                     │
 任务模式（有 Skill）
   ├─ 有 Skill  → 基于 Skill 高效执行
   └─ 无 Skill  → 探索足够完成任务即可，无需遍历全部功能
-                    │
+                     │
 自由探索模式（无 Skill，无预设任务）
   └─ 全面摸索系统所有功能 → 生成完整说明书 + Skill
 ```
@@ -66,6 +67,25 @@ Skill 编译（基础）
 - **适用场景：** 已有文档的内部业务系统、成熟软件的操作自动化
 
 自由探索和任务执行过程中生成的说明书，同样可以编译为 Skill 供后续复用。
+
+#### 基础层：学习模式
+
+用户开启录屏，正常操作桌面应用，RegionCUA 学习操作视频并自动生成 Skill。
+
+**核心机制：**
+1. 逐帧分析录屏视频，识别当前活跃应用及窗口切换
+2. 通过前后帧差异检测鼠标点击、键盘输入、滚动等操作
+3. 用视觉模型理解每个操作的用户意图（"点击文件菜单"、"在搜索框输入关键词"等）
+4. 支持多应用协同：自动追踪应用间切换（如从浏览器复制数据到 Excel），将跨应用工作流整合为单一 Skill
+
+**生成的 Skill 不依赖以下环境因素：**
+- **桌面分辨率** — 使用语义元素描述而非绝对坐标
+- **应用窗口位置和大小** — 基于界面元素语义定位，而非窗口几何参数
+- **应用版本** — 提取操作意图和功能路径，而非版本特定的 UI 细节
+
+**输入：** 录屏视频文件（MP4 / AVI / MKV）或实时录屏
+**输出：** 可复用的语义化 Skill + 操作回放文档
+**适用场景：** 人工操作录屏转自动化、跨应用工作流捕获、老员工经验沉淀
 
 #### 执行层：任务模式
 
@@ -111,6 +131,7 @@ commands:
   run: uv run region-cua run
   explore: uv run region-cua explore
   compile: uv run region-cua compile
+  learn: uv run region-cua learn
   list-models: uv run region-cua list-models
   info: uv run region-cua info
 install:
@@ -184,7 +205,27 @@ uv run region-cua explore "Notepad++"
 uv run region-cua compile "path/to/manual.pdf" --app "ERP系统"
 ```
 
-### 6.5 预览模式
+### 6.5 学习模式
+
+从录屏视频学习操作并生成语义化 Skill：
+
+```bash
+# 从已有视频文件学习
+uv run region-cua learn "recordings/my_operation.mp4"
+
+# 实时录屏学习（按 Ctrl+C 结束录屏后自动分析）
+uv run region-cua learn --record
+
+# 指定涉及的应用（提升识别准确率）
+uv run region-cua learn "recordings/demo.mp4" --apps "Excel,Chrome,Notepad"
+
+# 生成时同时输出操作回放文档
+uv run region-cua learn "recordings/demo.mp4" --replay-doc
+```
+
+学习模式生成的 Skill 不依赖桌面分辨率、窗口位置/大小和应用版本，可在不同环境复用。
+
+### 6.6 预览模式
 
 仅生成操作计划，不实际执行：
 
@@ -192,19 +233,19 @@ uv run region-cua compile "path/to/manual.pdf" --app "ERP系统"
 uv run region-cua run "打开 Excel 创建销售表格" --dry-run
 ```
 
-### 6.6 指定模型
+### 6.7 指定模型
 
 ```bash
 uv run region-cua run "描述当前桌面" --model minicpm-v
 ```
 
-### 6.7 不录屏
+### 6.8 不录屏
 
 ```bash
 uv run region-cua run "打开画图工具画一个圆" --no-video
 ```
 
-### 6.8 指定后端提供者
+### 6.9 指定后端提供者
 
 默认使用 Ollama，可通过环境变量或 `--provider` 切换为 vLLM：
 
@@ -216,7 +257,7 @@ export PROVIDER=vllm
 uv run region-cua run "打开 Excel" --provider vllm
 ```
 
-### 6.9 允许任务期间锁屏
+### 6.10 允许任务期间锁屏
 
 默认情况下任务执行期间会阻止系统进入锁屏/睡眠（Windows 走 `SetThreadExecutionState`、Linux 走 `systemd-inhibit`、macOS 走 `caffeinate`），因为锁屏后所有桌面 agent 都拿不到屏幕内容（截图只会拿到锁屏画面）。如需明确允许锁屏：
 
@@ -224,7 +265,7 @@ uv run region-cua run "打开 Excel" --provider vllm
 uv run region-cua run "..." --allow-lock
 ```
 
-### 6.10 管理命令
+### 6.11 管理命令
 
 ```bash
 uv run region-cua list-models    # 列出可用 Ollama 模型
@@ -268,6 +309,20 @@ outputs/{时间戳}_探索_{app名}/
 outputs/{时间戳}_编译_{app名}/
 ├── skill/               # 编译生成的操作 Skill
 └── sources/             # 引用源文档
+```
+
+### 7.4 学习模式
+
+学习模式生成语义化 Skill 和操作回放文档：
+
+```
+outputs/{时间戳}_学习_{app名或multi}/
+├── skill/               # 语义化 Skill（不依赖分辨率/窗口/版本）
+│   ├── SKILL.md         # Skill 定义
+│   └── steps.json       # 结构化操作步骤（含语义描述）
+├── replay.md            # 操作回放文档（含关键帧截图）
+├── frames/              # 关键帧截图（操作前后对比）
+└── analysis.log         # 视频分析日志
 ```
 
 ## 8. 不在范围内
