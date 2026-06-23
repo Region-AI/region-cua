@@ -285,7 +285,7 @@ outputs/{timestamp}_compile_{app_name}/
 | uv | Dependency management & runner (`pip install uv`) |
 | Ollama **or** vLLM | Local vision model inference engine (choose one) |
 | Windows 10/11 | Currently supported desktop platform |
-| Qwen3.6:latest (recommended) | 36B MoE model; planning and vision share one model to avoid 30s+ cold-start latency from model switching |
+| Qwen3.6:latest (recommended) | 35B MoE model; planning and vision share one model to avoid 30s+ cold-start latency from model switching |
 
 ### Risks & Mitigations
 

@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     ollama_host: str = "http://localhost:11434"
     # 规划与视觉默认使用同一个模型，避免 Ollama 在两个模型之间反复
     # 切换（每次切换需要重新加载到 VRAM，开销 30+ 秒）。
-    # qwen3.6:latest 是 36B MoE，原生支持 vision + tools + thinking。
+    # qwen3.6:latest 是 35B MoE，原生支持 vision + tools + thinking。
     ollama_planner_model: str = "qwen3.6:latest"
     ollama_vision_model: str = "qwen3.6:latest"
     ollama_timeout: int = 600
