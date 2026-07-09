@@ -188,6 +188,10 @@ class BenchRunner:
         # 提取 metadata 中的期望值
         expected_matches = re.findall(r'"expected_content"\s*:\s*["\']([^"\']*)["\']', main_py)
         expected_value = expected_matches[0] if expected_matches else True
+        # date-picker: 从 metadata["date"] 提取期望日期
+        date_matches = re.findall(r'"date"\s*:\s*["\']([^"\']+)["\']', main_py)
+        if date_matches and expected_value is True:
+            expected_value = date_matches[variant_index % len(date_matches)] if date_matches else True
 
         # 提取 width/height
         width_match = re.search(r'"width"\s*:\s*(\d+)', main_py)

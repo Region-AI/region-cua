@@ -230,8 +230,8 @@ def workflow_date_picker(executor, step) -> str:
         executor.logger.info(f"年月区域定位失败: {exc}")
 
     # 4. 重新截图，找目标年份（年月选择视图中年份列表可能需要滚动）
-    # 用布局分析理解年月选择视图结构
-    # Chrome 年月视图：顶部年份标签 + 月份网格(4x3) + 年份列表（可滚动）
+    # Chrome 年月视图：年份列表右侧有滚动条，但太细 OmniParser 检测不到
+    # 用键盘上下箭头键滚动年份列表（年月视图支持键盘导航）
     year_found = False
 
     # 先尝试当前视图
@@ -239,7 +239,7 @@ def workflow_date_picker(executor, step) -> str:
         year_found = True
         executor.logger.info(f"找到并点击年份: {target_year}")
 
-    # 当前视图没找到，用布局分析找年份列表和滚动条
+    # 当前视图没找到，用布局分析判断滚动方向，然后用键盘滚动
     if not year_found:
         _move_cursor_away(inp)
         ym_shot = executor._capture("workflow_dp_year_list")
@@ -248,66 +248,71 @@ def workflow_date_picker(executor, step) -> str:
                 from ..vision.omniparser import OmniParser
                 executor._omniparser = OmniParser(enable_vlm_icons=False)
             ym_elements = executor._omniparser.parse(ym_shot)
-            # 用布局分析找年份列表
-            from ..vision.layout_analyzer import _cluster_elements, _detect_list
-            # 只看日历区域
-            cal_elements = [e for e in ym_elements
-                if 100 < e["center"][0] < 500 and 240 < e["center"][1] < 600]
-            clusters = _cluster_elements(cal_elements, max_gap=40)
-            year_list_bbox = None
-            for cluster in clusters:
-                texts = [e.get("text", "") for e in cluster]
-                # 年份列表：包含 "202" 开头的文字
-                if any(t.startswith("202") or t.startswith("201") for t in texts):
-                    lst = _detect_list(cluster)
-                    if lst and lst["count"] >= 3:
-                        year_list_bbox = lst["bbox"]
-                        executor.logger.info(f"找到年份列表: {lst['count']}个 bbox={year_list_bbox}")
+
+            # 看可见年份判断滚动方向
+            visible_years = []
+            for e in ym_elements:
+                text = (e.get("text") or "").strip()
+                if text.isdigit() and 2000 < int(text) < 2100:
+                    visible_years.append(int(text))
+                    cx, cy = e["center"]
+                    visible_years.append((int(text), cx, cy))
+
+            if visible_years:
+                # 提取纯年份
+                year_values = [y for y in visible_years if isinstance(y, int)]
+                min_visible = min(year_values) if year_values else 2026
+                target_y = int(target_year)
+
+                # 判断方向
+                if target_y < min_visible:
+                    direction = "up"
+                    executor.logger.info(f"目标年份 {target_year} < 最小可见 {min_visible}，向上滚动")
+                else:
+                    direction = "down"
+                    executor.logger.info(f"目标年份 {target_year} > 最大可见 {max(year_values)}，向下滚动")
+
+                # 用键盘箭头键滚动（年月视图支持键盘导航）
+                # 先点击年份列表区域确保焦点在列表上
+                for yv in visible_years:
+                    if isinstance(yv, tuple):
+                        _, cx, cy = yv
+                        inp.click_at(cx, cy)
+                        time.sleep(0.3)
                         break
 
-            if year_list_bbox:
-                # 年份在列表上方，目标年份更早 -> 向上滚动
-                # 年份在列表下方，目标年份更晚 -> 向下滚动
-                # 判断方向：看列表中已有的年份
-                visible_years = []
-                for e in ym_elements:
-                    text = (e.get("text") or "").strip()
-                    if text.isdigit() and 2000 < int(text) < 2100:
-                        visible_years.append(int(text))
-                if visible_years:
-                    min_visible = min(visible_years)
-                    target_y = int(target_year)
-                    if target_y < min_visible:
-                        # 目标年份更早，向上滚动
-                        for _ in range(10):
-                            inp.scroll(8)
-                            time.sleep(0.5)
-                            if _find_and_click(target_year, y_range=(250, 600)):
-                                year_found = True
-                                executor.logger.info(f"向上滚动找到年份: {target_year}")
-                                break
-                    else:
-                        # 目标年份更晚，向下滚动
-                        for _ in range(10):
-                            inp.scroll(-8)
-                            time.sleep(0.5)
-                            if _find_and_click(target_year, y_range=(250, 600)):
-                                year_found = True
-                                executor.logger.info(f"向下滚动找到年份: {target_year}")
-                                break
+                key = "up" if direction == "up" else "down"
+                for _ in range(30):  # 最多按 30 次箭头键
+                    inp.press_key(key)
+                    time.sleep(0.15)
+                    if _find_and_click(target_year, y_range=(250, 600)):
+                        year_found = True
+                        executor.logger.info(f"键盘滚动找到年份: {target_year}")
+                        break
         except Exception as exc:
             executor.logger.info(f"布局分析年份列表失败: {exc}")
 
-    # 兜底：盲滚
+    # 兜底：盲滚（鼠标滚轮 + 键盘箭头）
     if not year_found:
-        for direction in [5, -5]:  # 先上后下
-            for _ in range(5):
-                inp.scroll(direction)
-                time.sleep(0.5)
-                if _find_and_click(target_year, y_range=(250, 600)):
-                    year_found = True
-                    executor.logger.info(f"兜底滚动找到年份: {target_year}")
-                    break
+        for method in ["keyboard_up", "keyboard_down", "scroll_up", "scroll_down"]:
+            if "keyboard" in method:
+                key = "up" if "up" in method else "down"
+                for _ in range(10):
+                    inp.press_key(key)
+                    time.sleep(0.15)
+                    if _find_and_click(target_year, y_range=(250, 600)):
+                        year_found = True
+                        executor.logger.info(f"兜底键盘找到年份: {target_year}")
+                        break
+            else:
+                direction = 5 if "up" in method else -5
+                for _ in range(5):
+                    inp.scroll(direction)
+                    time.sleep(0.3)
+                    if _find_and_click(target_year, y_range=(250, 600)):
+                        year_found = True
+                        executor.logger.info(f"兜底滚轮找到年份: {target_year}")
+                        break
             if year_found:
                 break
     if not year_found:
@@ -375,9 +380,10 @@ def workflow_date_picker(executor, step) -> str:
 
 
 def workflow_icon_click(executor, step) -> str:
-    """图标点击工作流：截图 → VLM 批量识别图标 → 匹配 → click。
+    """图标点击工作流：截图 → OmniParser+SAM3 检测 → VLM 识别 → click。
 
     纯图标按钮没有文字，需要 VLM 识别图标含义。
+    SAM3 用 "icon" 提示补充检测 OmniParser 漏检的图标。
     """
     from ..automation import input as inp
 
@@ -388,7 +394,7 @@ def workflow_icon_click(executor, step) -> str:
 
     before = executor._capture("workflow_icon_before")
 
-    # 2. 用启用 VLM 的 OmniParser 解析
+    # 2. 先用 OmniParser（启用 VLM 图标识别）解析
     try:
         from ..vision.omniparser import OmniParser
         parser = OmniParser(box_threshold=0.01, enable_vlm_icons=True)
@@ -405,13 +411,50 @@ def workflow_icon_click(executor, step) -> str:
         inp.click_at(cx, cy)
         return f"图标点击：找到 {target} at ({cx},{cy})"
 
+    # 4. OmniParser 没找到，用 SAM3 检测 icon 区域
+    try:
+        from ..vision.sam3_analyzer import SAM3Analyzer
+        analyzer = SAM3Analyzer()
+        sam3_results = analyzer.segment(before, "icon", threshold=0.3)
+        if sam3_results:
+            # 用 VLM 识别每个 SAM3 检测到的 icon 区域
+            executor.logger.info(f"SAM3 检测到 {len(sam3_results)} 个 icon")
+            # 裁剪每个 icon 区域，用 VLM 识别
+            from PIL import Image as _Img
+            img = _Img.open(before).convert("RGB")
+            from ..vision.ollama_client import OllamaClient
+            from ..config import get_settings
+            settings = get_settings()
+            client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
+            for r in sam3_results:
+                x1, y1, x2, y2 = r["box"]
+                # 裁剪 icon 区域（扩大一点边界）
+                crop = img.crop((max(0, x1-5), max(0, y1-5), x2+5, y2+5))
+                import io as _io
+                buf = _io.BytesIO()
+                crop.save(buf, format="PNG")
+                resp = client.chat(
+                    settings.ollama_vision_model,
+                    [{"role": "user", "content": f"这个图标是什么？用一个英文单词回答（如 home, settings, play, pause, search）。如果是 {target} 图标，回答 YES。"}],
+                    images=[buf.getvalue()],
+                )
+                if target.lower() in resp.lower() or "yes" in resp.lower():
+                    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                    inp.click_at(cx, cy)
+                    client.close()
+                    return f"图标点击：SAM3+VLM 找到 {target} at ({cx},{cy}) score={r['score']:.2f}"
+            client.close()
+    except Exception as exc:
+        executor.logger.info(f"SAM3 图标检测失败: {exc}")
+
     return f"图标点击：未找到 {target}"
 
 
 def workflow_color_picker(executor, step) -> str:
     """颜色选择器工作流：截图 → VLM 识别颜色方块 → click。
 
-    颜色方块没有文字，需要 VLM 识别颜色。
+    颜色方块没有文字，用 VLM 直接识别颜色位置。
+    SAM3 用 "rectangle" 提示补充检测颜色方块区域。
     """
     from ..automation import input as inp
 
@@ -421,34 +464,31 @@ def workflow_color_picker(executor, step) -> str:
         time.sleep(0.5)
 
     before = executor._capture("workflow_color_before")
+    color = step.target or "red"
 
-    # 2. 用 VLM 直接问"红色方块在哪里"
+    # 2. 用 VLM 直接问"颜色方块在哪里"
     try:
         from ..vision.ollama_client import OllamaClient
         from ..config import get_settings
-        import base64 as _b64
         settings = get_settings()
         client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
 
-        color = step.target or "red"
         prompt = (
             f"这张截图中有一个颜色选择器，请找到「{color}」颜色方块的位置。"
             f"返回 JSON：{{\"found\": true, \"x\": 整数, \"y\": 整数}}\n"
             f"坐标基于截图左上角。只输出 JSON。"
         )
 
-        # 读取截图文件
         with open(before, "rb") as f:
             img_bytes = f.read()
 
         resp = client.chat(
-            "qwen3.5:latest",
+            settings.ollama_vision_model,
             [{"role": "user", "content": prompt}],
             images=[img_bytes],
         )
         client.close()
 
-        # 解析坐标
         import re
         import json
         match = re.search(r'\{[^}]+\}', resp)
@@ -461,12 +501,49 @@ def workflow_color_picker(executor, step) -> str:
     except Exception:
         pass
 
-    # 3. 兜底：用 OmniParser 找无文字的彩色元素
+    # 3. VLM 没找到，用 SAM3 检测 rectangle 区域（颜色方块）
+    try:
+        from ..vision.sam3_analyzer import SAM3Analyzer
+        analyzer = SAM3Analyzer()
+        sam3_results = analyzer.segment(before, "rectangle", threshold=0.3)
+        if sam3_results:
+            executor.logger.info(f"SAM3 检测到 {len(sam3_results)} 个 rectangle")
+            # 用 VLM 识别每个 rectangle 是否是目标颜色
+            from PIL import Image as _Img
+            img = _Img.open(before).convert("RGB")
+            from ..vision.ollama_client import OllamaClient
+            from ..config import get_settings
+            settings = get_settings()
+            client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
+            for r in sam3_results:
+                x1, y1, x2, y2 = r["box"]
+                # 只看面积适中的方块（排除太大或太小的）
+                w, h = x2 - x1, y2 - y1
+                if w < 10 or h < 10 or w > 200 or h > 200:
+                    continue
+                crop = img.crop((x1, y1, x2, y2))
+                import io as _io
+                buf = _io.BytesIO()
+                crop.save(buf, format="PNG")
+                resp = client.chat(
+                    settings.ollama_vision_model,
+                    [{"role": "user", "content": f"这个方块是什么颜色？如果是 {color}，回答 YES。否则回答 NO。"}],
+                    images=[buf.getvalue()],
+                )
+                if "yes" in resp.lower():
+                    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                    inp.click_at(cx, cy)
+                    client.close()
+                    return f"颜色选择器：SAM3+VLM 定位 {color} at ({cx},{cy}) score={r['score']:.2f}"
+            client.close()
+    except Exception as exc:
+        executor.logger.info(f"SAM3 颜色检测失败: {exc}")
+
+    # 4. 兜底：用 OmniParser 找无文字的彩色元素
     try:
         from ..vision.omniparser import OmniParser
         parser = executor._omniparser or OmniParser(box_threshold=0.01)
         elements = parser.parse(before)
-        # 找无文字的图标元素（颜色方块）
         for e in elements:
             if not e.get("text") and e.get("center", (0, 0))[1] > 120:
                 cx, cy = e["center"]
