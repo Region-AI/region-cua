@@ -368,3 +368,250 @@
 - 粘贴历史项：`click` 历史项
 - 固定剪贴板项：`click` 项的固定按钮
 - 清除剪贴板：`click` "全部清除"
+
+---
+
+## 扩展应用操作指南
+
+### 微信（WeChat）详细操作
+
+#### 聊天操作
+- 发送消息：`click` 联系人/群 -> `click` 输入框 -> `type` 消息 -> `hotkey` "enter"
+- 发送换行消息：`hotkey` "shift+enter"（输入框内换行）
+- 撤回消息：右键消息 -> `click` "撤回"（2分钟内）
+- 转发消息：右键消息 -> `click` "转发" -> `click` 联系人 -> `click` "发送"
+- 回复消息：右键消息 -> `click` "回复" -> `type` 回复内容
+- 引用消息：右键消息 -> `click` "引用"
+- @某人（群聊）：`type` "@" -> `click` 联系人名
+- 发送文件：`click` 聊天窗口 -> 将文件拖入聊天窗口 或 `click` 文件传输按钮 -> `click` 文件
+- 发送图片：`click` 图片按钮 或拖入图片
+- 截图发送：`hotkey` "alt+a" -> 框选区域 -> `click` "完成" -> 自动粘贴到输入框 -> `hotkey` "enter"
+
+#### 联系人管理
+- 添加联系人：`click` "+" -> `click` "添加联系人" -> `type` 微信号/手机号 -> `hotkey` "enter"
+- 搜索联系人：`click` 搜索框 -> `type` 联系人名/备注
+- 修改备注：`click` 联系人 -> 右键 -> `click` "备注" -> `type` 新备注
+- 创建群聊：`click` "+" -> `click` "发起群聊" -> `click` 多个联系人 -> `click` "确定"
+
+#### 朋友圈
+- 打开朋友圈：`click` "发现" -> `click` "朋友圈"
+- 发朋友圈：`click` 相机图标 -> `type` 内容 -> `click` "发表"
+- 点赞/评论：`click` 消息下方的心形/评论图标
+
+#### 设置
+- 打开设置：`click` "更多"（...） -> `click` "设置"
+- 修改字体大小：设置 -> `click` "通用" -> `click` "字体大小" -> 拖拽滑块
+- 消息提醒：设置 -> `click` "新消息提醒"
+
+### WPS Office 详细操作
+
+#### WPS 文字（文档）
+- 打开：`open_app` "wps"
+- 字体设置：`click` 字体下拉框 -> `type` 字体名 -> `hotkey` "enter"
+- 字号设置：`click` 字号下拉框 -> `type` 数字 -> `hotkey` "enter"
+- 段落格式：`click` "开始" -> `click` 对齐方式（左/中/右/两端）
+- 插入页眉页脚：`click` "插入" -> `click` "页眉" 或 "页脚"
+- 插入目录：`click` "引用" -> `click` "目录"
+- 插入分页符：`hotkey` "ctrl+enter"
+- 查找替换：`hotkey` "ctrl+f"（查找）或 `hotkey` "ctrl+h"（替换）
+- 审阅修订：`click` "审阅" -> `click` "修订"
+- 字数统计：`click` "审阅" -> `click` "字数统计"
+- 导出PDF：`click` "文件" -> `click` "输出为PDF"
+- 打印预览：`hotkey` "ctrl+p"
+
+#### WPS 表格（ET）
+- 打开：`open_app` "et"
+- 选定单元格：`click` 单元格
+- 输入公式：`click` 单元格 -> `type` "=SUM(A1:A10)" -> `hotkey` "enter"
+- 自动填充：`click` 单元格右下角拖拽手柄
+- 条件格式：`click` "开始" -> `click` "条件格式" -> 选择规则
+- 冻结窗格：`click` "视图" -> `click` "冻结窗格"
+- 数据透视表：`click` "插入" -> `click` "数据透视表"
+- 图表：`click` "插入" -> `click` "图表" -> 选择图表类型
+- 排序：选中数据列 -> `click` "数据" -> `click` "升序"/"降序"
+- 筛选：选中表头 -> `click` "数据" -> `click` "筛选"
+- 合并单元格：选中区域 -> `click` "开始" -> `click` "合并居中"
+- 保护工作表：`click` "审阅" -> `click` "保护工作表"
+
+#### WPS 演示（PPT）
+- 打开：`open_app` "wpp"
+- 新建幻灯片：`hotkey` "ctrl+m" 或 `click` "新建幻灯片"
+- 插入文本框：`click` "插入" -> `click` "文本框" -> 拖拽绘制
+- 插入图片：`click` "插入" -> `click` "图片" -> 选择文件
+- 幻灯片切换效果：`click` "切换" -> `click` 效果
+- 动画效果：选中对象 -> `click` "动画" -> `click` 效果
+- 放映：`hotkey` "f5"（从头）或 `hotkey` "shift+f5"（从当前）
+- 排练计时：`click` "幻灯片放映" -> `click` "排练计时"
+
+### Windows 文件资源管理器详细操作
+
+#### 导航
+- 打开：`open_app` "explorer" 或 `hotkey` "win+e"
+- 地址栏输入路径：`hotkey` "ctrl+l" 或 `click` 地址栏 -> `type` 路径 -> `hotkey` "enter"
+- 前进/后退：`hotkey` "alt+right" / `hotkey` "alt+left"
+- 向上一级：`hotkey` "alt+up"
+- 最近访问：`click` "快速访问" -> `click` 最近文件
+
+#### 文件操作
+- 新建文件夹：`hotkey` "ctrl+shift+n" -> `type` 名称 -> `hotkey` "enter"
+- 复制：选中 -> `hotkey` "ctrl+c"
+- 粘贴：`hotkey` "ctrl+v"
+- 剪切：`hotkey` "ctrl+x"
+- 重命名：选中 -> `hotkey` "f2" -> `type` 新名 -> `hotkey` "enter"
+- 删除到回收站：选中 -> `hotkey` "delete"
+- 永久删除：选中 -> `hotkey` "shift+delete"
+- 属性：选中 -> `hotkey` "alt+enter"
+- 全选：`hotkey` "ctrl+a"
+
+#### 搜索与筛选
+- 搜索当前文件夹：`click` 搜索框 -> `type` 关键词
+- 按类型搜索：搜索框输入 `type:pdf` 或 `ext:.docx`
+- 按日期搜索：搜索框输入 `datemodified:today`
+- 按大小搜索：搜索框输入 `size:>10MB`
+
+#### 视图设置
+- 大图标视图：`click` "查看" -> `click` "大图标"
+- 详细信息视图：`click` "查看" -> `click` "详细信息"
+- 排序：`click` 列标题（名称/修改日期/类型/大小）
+- 分组：右键空白 -> `click` "分组依据" -> 选择分组字段
+- 隐藏文件：`click` "查看" -> 勾选 "隐藏的项目"
+
+### 浏览器详细操作（Chrome / Edge）
+
+#### 标签页管理
+- 新建标签页：`hotkey` "ctrl+t"
+- 关闭标签页：`hotkey` "ctrl+w"
+- 恢复关闭的标签页：`hotkey` "ctrl+shift+t"
+- 切换标签页：`hotkey` "ctrl+tab" / `hotkey` "ctrl+shift+tab"
+- 跳转到第N个标签页：`hotkey` "ctrl+N"（N=1-8）
+- 跳转到最后一个标签页：`hotkey` "ctrl+9"
+- 固定标签页：右键标签 -> `click` "固定标签页"
+- 标签页分组：右键标签 -> `click` "将标签页添加到新组"
+
+#### 地址栏与导航
+- 聚焦地址栏：`hotkey` "ctrl+l" 或 `hotkey` "f6"
+- 搜索：在地址栏 `type` 关键词 -> `hotkey` "enter"
+- 打开网站：地址栏 `type` URL -> `hotkey` "enter"
+- 在新标签页打开链接：`hotkey` "ctrl+click" 链接
+- 后退/前进：`hotkey` "alt+left" / `hotkey` "alt+right"
+- 刷新：`hotkey` "f5" 或 `hotkey` "ctrl+r"
+- 强制刷新（绕过缓存）：`hotkey` "ctrl+shift+r" 或 `hotkey` "ctrl+f5"
+- 停止加载：`hotkey` "escape"
+
+#### 页面操作
+- 页面搜索：`hotkey` "ctrl+f" -> `type` 关键词
+- 放大/缩小：`hotkey` "ctrl+=" / `hotkey` "ctrl+-"
+- 恢复缩放：`hotkey` "ctrl+0"
+- 全屏：`hotkey` "f11"
+- 打印：`hotkey` "ctrl+p"
+- 保存网页：`hotkey` "ctrl+s"
+- 查看源码：`hotkey` "ctrl+u"
+- 开发者工具：`hotkey` "f12" 或 `hotkey` "ctrl+shift+i"
+
+#### 书签管理
+- 添加书签：`hotkey` "ctrl+d" -> `hotkey` "enter"
+- 书签栏：`hotkey` "ctrl+shift+b" 显示/隐藏书签栏
+- 书签管理器：`hotkey` "ctrl+shift+o"
+
+#### 下载管理
+- 查看下载：`hotkey` "ctrl+j"
+- 暂停下载：`click` 下载项的暂停按钮
+- 取消下载：`click` 下载项的取消按钮
+- 打开下载文件：`click` 下载项 -> `click` "打开"
+- 在文件夹中显示：`click` 下载项 -> `click` "在文件夹中显示"
+
+#### 隐私与安全
+- 隐私模式：`hotkey` "ctrl+shift+n"（Chrome）/ `hotkey` "ctrl+shift+p"（Edge）
+- 清除浏览数据：`hotkey` "ctrl+shift+delete"
+- 查看Cookie：开发者工具 -> Application -> Cookies
+
+### Windows 系统设置详细操作
+
+#### 打开方式
+- 设置：`hotkey` "win+i"
+- 控制面板：`open_app` "control"
+- 设备管理器：`hotkey` "win+x" -> `hotkey` "m"
+
+#### 常用设置
+- WiFi：设置 -> `click` "网络和 Internet" -> `click` "WiFi"
+- 蓝牙：设置 -> `click` "蓝牙和其他设备"
+- 显示：设置 -> `click` "系统" -> `click` "显示"
+- 音量：`click` 任务栏音量图标 -> 拖拽滑块
+- 亮度：设置 -> 系统 -> 显示 -> 亮度和颜色滑块
+- 夜间模式：设置 -> 系统 -> 显示 -> `click` "夜间模式" 开关
+- 飞行模式：设置 -> `click` "网络和 Internet" -> `click` "飞行模式"
+- 日期时间：设置 -> `click` "时间和语言"
+- 语言：设置 -> `click` "时间和语言" -> `click` "语言和区域"
+- 输入法：设置 -> `click` "时间和语言" -> `click` "输入"
+- 通知：设置 -> `click` "系统" -> `click` "通知"
+- 电源：设置 -> `click` "系统" -> `click` "电源"
+- 存储：设置 -> `click` "系统" -> `click` "存储"
+- 应用管理：设置 -> `click` "应用" -> `click` "已安装的应用"
+- 更新：设置 -> `click` "Windows 更新" -> `click` "检查更新"
+- 账户：设置 -> `click` "账户"
+- 隐私：设置 -> `click` "隐私和安全性"
+
+### 命令行 / 终端详细操作
+
+#### CMD
+- 打开：`open_app` "cmd"
+- 执行命令：`type` 命令 -> `hotkey` "enter"
+- 复制输出：选中文本 -> `hotkey` "ctrl+c" 或右键复制
+- 粘贴：`hotkey` "ctrl+v" 或右键粘贴
+- 清屏：`type` "cls" -> `hotkey` "enter"
+- 查看目录：`type` "dir" -> `hotkey` "enter"
+- 切换目录：`type` "cd 路径" -> `hotkey` "enter"
+- 查看IP：`type` "ipconfig" -> `hotkey` "enter"
+- 查看进程：`type` "tasklist" -> `hotkey` "enter"
+- 结束进程：`type` "taskkill /im 进程名 /f" -> `hotkey` "enter"
+
+#### PowerShell
+- 打开：`open_app` "powershell"
+- 执行命令：`type` 命令 -> `hotkey` "enter"
+- 清屏：`type` "clear" -> `hotkey` "enter"
+- 查看服务：`type` "Get-Service" -> `hotkey` "enter"
+- 启动服务：`type` "Start-Service 服务名" -> `hotkey` "enter"
+
+#### Windows Terminal
+- 打开：`hotkey` "win+t" 或 `open_app` "wt"
+- 新建标签页：`hotkey` "ctrl+shift+t"
+- 关闭标签页：`hotkey` "ctrl+shift+w"
+- 拆分窗格：`hotkey` "alt+shift+d"
+- 切换窗格：`hotkey` "alt+方向键"
+
+### 系统快捷键速查
+
+#### 窗口管理
+- 切换窗口：`hotkey` "alt+tab"
+- 关闭窗口：`hotkey` "alt+f4"
+- 最小化：`hotkey` "win+down"
+- 最大化：`hotkey` "win+up"
+- 左半屏：`hotkey` "win+left"
+- 右半屏：`hotkey` "win+right"
+- 多桌面：`hotkey` "win+tab" -> `click` "新建桌面"
+- 切换桌面：`hotkey` "ctrl+win+left" / `hotkey` "ctrl+win+right"
+
+#### 文件操作通用
+- 复制：`hotkey` "ctrl+c"
+- 粘贴：`hotkey` "ctrl+v"
+- 剪切：`hotkey` "ctrl+x"
+- 撤销：`hotkey` "ctrl+z"
+- 重做：`hotkey` "ctrl+y"
+- 全选：`hotkey` "ctrl+a"
+- 保存：`hotkey` "ctrl+s"
+- 打开：`hotkey` "ctrl+o"
+- 新建：`hotkey` "ctrl+n"
+- 打印：`hotkey` "ctrl+p"
+- 查找：`hotkey` "ctrl+f"
+- 替换：`hotkey` "ctrl+h"
+
+#### 截图
+- 全屏截图：`hotkey` "prtscn"
+- 当前窗口截图：`hotkey` "alt+prtscn"
+- 截图工具：`hotkey` "win+shift+s" -> 框选区域
+- 截图后自动复制到剪贴板，`hotkey` "ctrl+v" 粘贴
+
+#### 输入法
+- 切换中英文：`hotkey` "shift"
+- 切换输入法：`hotkey` "ctrl+shift" 或 `hotkey` "win+space"
+- 中英文标点切换：`hotkey` "ctrl+."
