@@ -10,6 +10,9 @@
 
 from __future__ import annotations
 
+# 必须在任何其他 import 之前：清理 Hermes 环境路径污染
+from ._env_fix import *  # noqa: F401,F403
+
 import re
 from datetime import datetime
 from pathlib import Path
