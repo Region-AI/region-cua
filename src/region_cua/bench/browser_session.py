@@ -143,8 +143,34 @@ class BrowserSession:
         self._temp_file.write_text(full_html, encoding="utf-8")
 
         # 用系统默认浏览器打开
+        # 优先用 Edge 的 --new-window 参数强制开新窗口（避免复用现有窗口）
         url = f"file:///{self._temp_file.as_posix()}"
-        webbrowser.open(url)
+        import subprocess
+        import shutil
+
+        opened = False
+        # 尝试用 msedge --new-window 强制开新窗口
+        edge_paths = [
+            shutil.which("msedge"),
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        ]
+        for ep in edge_paths:
+            if ep and Path(ep).exists():
+                try:
+                    subprocess.Popen(
+                        [ep, "--new-window", "--no-default-browser-check", url],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    opened = True
+                    break
+                except Exception:
+                    pass
+                break
+
+        if not opened:
+            webbrowser.open(url)
         self._opened = True
 
         # 等窗口出现后调整位置和大小（左上角 1/4 屏幕大小，让按钮占比更大）

@@ -75,6 +75,22 @@ class BenchRunner:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def _check_screen_unlocked() -> None:
+        """检测屏幕是否锁定。锁屏时截图只能拿到锁屏界面，所有任务都会失败。"""
+        import ctypes
+        user32 = ctypes.windll.user32
+        fg = user32.GetForegroundWindow()
+        if fg:
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(fg, buf, 256)
+            title = buf.value
+            if "锁屏" in title or "Lock" in title.lower() or "logon" in title.lower():
+                raise RuntimeError(
+                    f"屏幕已锁定（前台窗口: {title}）。"
+                    "请先解锁屏幕再运行 bench。"
+                )
+
     def list_tasks(self) -> list[str]:
         """列出所有可用的任务目录名。"""
         return sorted([
@@ -397,6 +413,9 @@ class BenchRunner:
         """批量运行多个任务。"""
         if task_names is None:
             task_names = self.list_tasks()
+
+        # 检测屏幕是否锁定（锁屏时截图只能拿到锁屏界面，所有任务都会失败）
+        self._check_screen_unlocked()
 
         results: list[BenchResult] = []
         for name in task_names:

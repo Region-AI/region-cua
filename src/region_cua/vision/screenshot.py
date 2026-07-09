@@ -19,7 +19,11 @@ def capture_screen():
     退回 pyautogui（带重试）。
     """
     import time as _time
+    import logging
+    _log = logging.getLogger(__name__)
+
     # 方案1: mss（推荐，不依赖 GDI 对象）
+    mss_err = None
     try:
         import mss
         from PIL import Image as _Img
@@ -27,19 +31,25 @@ def capture_screen():
             monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
             raw = sct.grab(monitor)
             return _Img.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
-    except Exception:
-        pass
+    except Exception as e:
+        mss_err = e
+        _log.debug("mss screenshot failed: %s", e)
 
     # 方案2: pyautogui（带重试）
     import pyautogui
     last_err = None
-    for _ in range(3):
+    for attempt in range(3):
         try:
             return pyautogui.screenshot()
         except Exception as e:
             last_err = e
+            _log.debug("pyautogui screenshot attempt %d failed: %s", attempt + 1, e)
             _time.sleep(0.5)
-    raise last_err
+
+    # 两种方案都失败，抛出包含 mss 和 pyautogui 错误信息的异常
+    raise OSError(
+        f"screen grab failed (mss: {mss_err}, pyautogui: {last_err})"
+    )
 
 
 def capture_window_bg(keyword: str):
