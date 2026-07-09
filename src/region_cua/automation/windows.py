@@ -30,6 +30,7 @@ def find_window_by_title(keyword: str) -> Optional[int]:
                 results.append(hwnd)
         return True
 
+    # 保持回调引用，防止被 GC（ctypes 回调对象生命周期必须覆盖 EnumWindows 调用）
     user32.EnumWindows(_enum_proc, 0)
     return results[0] if results else None
 

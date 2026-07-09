@@ -41,22 +41,51 @@ RegionCUA 是一个由本地 Ollama 视觉模型驱动的桌面自动化 Agent�
 ```
 
 ### 4.2 四级能力模型
+## 4.2 三级能力模型
 
-RegionCUA 提供四个能力层次，Skill 生成是基础，任务执行与自由探索在其上运作：
+RegionCUA 提供三个递进的能力层次，底层能力向上支撑：
 
 ```
-Skill 生成（基础）
-  ├─ 文档编译  — 有说明书 → 编译为 Skill
-  ├─ 视频学习  — 录屏操作视频 → 识别意图 → 生成 Skill
-  └─ 自由探索  — 无说明书 → 探索后生成说明书 → 编译为 Skill
-                     │
+Skill 编译（基础）
+  ├─ 有说明书 → 编译为 Skill
+  └─ 无说明书 → 探索后生成说明书 → 编译为 Skill
+                    │
 任务模式（有 Skill）
   ├─ 有 Skill  → 基于 Skill 高效执行
   └─ 无 Skill  → 探索足够完成任务即可，无需遍历全部功能
-                     │
+                    │
 自由探索模式（无 Skill，无预设任务）
   └─ 全面摸索系统所有功能 → 生成完整说明书 + Skill
 ```
+
+### 4.3 双后端：前台 / 后台操作
+
+RegionCUA 支持两种操作后端，通过 `--backend` 切换：
+
+| 后端 | 截图方式 | 操作方式 | 是否抢光标 | 被遮挡/锁屏 |
+|------|---------|---------|-----------|------------|
+| `foreground`（默认） | pyautogui 截全屏 | pyautogui 鼠标键盘 | 是 | 失效 |
+| `background` | PrintWindow 截特定窗口 | UIA / PostMessage | **否** | **仍可工作** |
+
+后台模式借鉴了 trycua/cua 的核心思路——Agent 在后台操作应用，不影响用户当前工作。实现上用 Win32 PrintWindow API 截取目标窗口（即使被遮挡），用 UI Automation / PostMessage 执行点击和输入（不移动实际鼠标）。
+
+### 4.4 AI Agent 集成
+
+RegionCUA 提供两种集成方式：
+
+**1. MCP 服务器**（推荐）—— 通过标准 MCP 协议接入任何支持 MCP 的 Agent：
+
+```bash
+# 启动 MCP 服务器（stdio 传输）
+region-cua mcp
+
+# 接入 Claude Code
+claude mcp add --transport stdio region-cua -- region-cua mcp
+```
+
+MCP 服务器暴露 11 个工具：screenshot / analyze / click / type_text / hotkey / scroll / wait / open_app / activate_window_tool / run_task / list_models。Agent 可以先用 screenshot 看屏幕，用 analyze 让视觉模型分析，再决定点击哪里。
+
+**2. CLI** —— 通过 `region-cua run` 命令行执行完整任务，适合脚本和自动化流程。
 
 #### 基础层：Skill 编译
 
@@ -262,7 +291,27 @@ uv run region-cua run "打开 Excel" --provider vllm
 uv run region-cua run "..." --allow-lock
 ```
 
-### 6.11 管理命令
+### 6.11 后台模式
+
+默认前台操作（抢光标）。后台模式不抢光标、不激活窗口，即使目标窗口被遮挡也能截图和操作：
+
+```bash
+uv run region-cua run "打开记事本写一段文字" --backend background
+```
+
+### 6.12 MCP 服务器
+
+启动 MCP 服务器，让 Claude Code / Hermes / OpenClaw 等 Agent 通过 MCP 协议调用桌面自动化：
+
+```bash
+# 启动（stdio 传输，默认）
+uv run region-cua mcp
+
+# 接入 Claude Code
+claude mcp add --transport stdio region-cua -- uv run region-cua mcp
+```
+
+### 6.13 管理命令
 
 ```bash
 uv run region-cua list-models    # 列出可用 Ollama 模型
@@ -279,6 +328,7 @@ uv run region-cua info           # 查看配置
 outputs/{时间戳}_{任务名}/
 ├── 任务名.md            # 操作说明文档（内嵌截图路径）
 ├── operation.log        # 实时操作日志（每步开始/结束/视觉分析/错误，逐行 flush）
+├── trajectory.jsonl     # 结构化轨迹（JSONL，每行一步，含坐标/截图/视觉分析，可回放/训练）
 ├── screenshots/         # 步骤截图
 ├── recordings/          # 操作录屏（成功/失败/异常都尽力保存，编码失败有 .txt 诊断说明）
 └── scripts/             # 可复用 Python 脚本
@@ -349,6 +399,7 @@ outputs/{时间戳}_学习_{app名或multi}/
 | 复杂 UI 操作失败 | Skill 编译模式可提前注入系统领域知识，自由探索前联网收集背景信息 |
 | 录屏文件过大 | 提供 `--no-video` 选项跳过录屏 |
 | 任务期间系统锁屏导致截图失败 | 默认阻止锁屏/睡眠（Windows/Linux/macOS 三平台原生 API），可用 `--allow-lock` 关闭 |
+| 目标窗口被遮挡导致截图失败 | 后台模式 `--backend background` 用 PrintWindow API 截特定窗口，被遮挡也能截到 |
 
 ## 10. 待定事项
 

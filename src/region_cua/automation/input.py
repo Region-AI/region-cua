@@ -37,17 +37,71 @@ def click_at(x: int, y: int, button: str = "left", clicks: int = 1) -> None:
 
 
 def type_text(text: str, interval: float = 0.02) -> None:
-    """输入文本。含非 ASCII（如中文）时改用剪贴板粘贴。"""
+    """输入文本。
+
+    策略：
+    - 含非 ASCII（如中文）→ 剪贴板粘贴
+    - 纯 ASCII 但含 @ . , 等易被 IME 拦截的字符 → 剪贴板粘贴
+    - 纯字母数字 → 切英文输入法 + write() 逐字符
+    """
     if not text:
         return
     try:
         text.encode("ascii")
-        _pa().write(text, interval=interval)
-        return
     except UnicodeEncodeError:
-        pass
-    # 非中文也安全：走剪贴板
-    _paste(text)
+        _paste(text)
+        return
+    # 纯 ASCII：检查是否含 IME 易拦截字符
+    ime_sensitive = set("@.,;:!?/\\()[]{}\"'`~")
+    if any(c in ime_sensitive for c in text):
+        _paste(text)
+        return
+    # 纯字母数字：切英文输入法 + 逐字符输入
+    _ensure_english_ime()
+    _pa().write(text, interval=interval)
+
+
+# 输入法状态管理
+_ime_restored_to = None  # 记录切换前的输入法，用于恢复
+
+
+def _ensure_english_ime() -> None:
+    """确保当前是英文输入模式。
+
+    Windows 中文输入法（微软拼音/搜狗等）会拦截按键。
+    用 Shift 键切换中英文模式（大多数中文 IME 的默认快捷键）。
+    如果检测到当前是中文模式，按 Shift 切到英文，输入完后再切回。
+    """
+    global _ime_restored_to
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        # GetKeyboardLayout 获取当前线程的键盘布局
+        # 0x0404 = 中文(繁体), 0x0804 = 中文(简体)
+        layout = user32.GetKeyboardLayout(0)
+        lang_id = layout & 0xFFFF
+        if lang_id in (0x0404, 0x0804):
+            # 中文输入法 → 按 Shift 切换到英文模式
+            # 先记录状态（无法精确获取中/英模式，假设切换后是英文）
+            _ime_restored_to = "zh"
+            _pa().keyDown("shift")
+            _pa().keyUp("shift")
+            time.sleep(0.2)
+    except Exception:
+        pass  # 非 Windows 或无 IME，忽略
+
+
+def _restore_ime() -> None:
+    """输入完成后恢复输入法状态。"""
+    global _ime_restored_to
+    if _ime_restored_to == "zh":
+        try:
+            _pa().keyDown("shift")
+            _pa().keyUp("shift")
+            time.sleep(0.1)
+        except Exception:
+            pass
+    _ime_restored_to = None
 
 
 def _paste(text: str) -> None:

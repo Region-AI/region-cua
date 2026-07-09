@@ -81,6 +81,7 @@ def run_task(
     no_video: bool = True,
     no_log: bool = False,
     allow_lock: bool = False,
+    backend: str = "foreground",
     ask_user: Optional[Callable[[str], str]] = None,
 ) -> tuple[TaskPlan, list[StepRecord], Optional[Path]]:
     """执行一个桌面自动化任务的核心逻辑，CLI 与测试共用。
@@ -89,6 +90,7 @@ def run_task(
     allow_lock=False（默认）任务期间阻止系统锁屏/睡眠。
     no_video=False（默认）会录制 MP4，no_log=False（默认）会写 operation.log，
     成功失败异常路径下都尽力落盘。
+    backend: "foreground"（前台，抢光标）或 "background"（后台，不抢光标）。
     """
     settings = settings or get_settings()
     client = create_vision_client(settings)
@@ -113,6 +115,7 @@ def run_task(
         verify=True,
         video_fps=settings.video_fps,
         allow_lock=allow_lock,
+        backend=backend,
     )
     try:
         records = executor.execute(plan)
@@ -140,13 +143,17 @@ def run(
         False, "--allow-lock",
         help="允许任务期间系统锁屏/睡眠（默认会阻止，避免截图失败）",
     ),
+    backend: str = typer.Option(
+        "foreground", "--backend",
+        help="操作后端：foreground（前台，抢光标）或 background（后台，不抢光标）",
+    ),
 ):
     """执行一个桌面自动化任务。"""
     settings = _resolve_settings(provider)
     vision_model = model or (
         settings.ollama_vision_model if settings.provider == "ollama" else settings.vllm_model
     )
-    console.print(f"[dim]提供者：{settings.provider} | 视觉模型：{vision_model}[/dim]")
+    console.print(f"[dim]提供者：{settings.provider} | 视觉模型：{vision_model} | 后端：{backend}[/dim]")
 
     with console.status("[bold green]正在规划任务…[/bold green]"):
         plan, _records, _ = run_task(task, settings, dry_run=True, model=model)
@@ -160,6 +167,7 @@ def run(
         plan, records, task_dir = run_task(
             task, settings, dry_run=False, model=model,
             no_video=no_video, no_log=no_log, allow_lock=allow_lock,
+            backend=backend,
         )
 
     ok = sum(1 for r in records if r.success)
@@ -355,6 +363,39 @@ def info():
     table.add_row("max_consecutive_failures", str(s.max_consecutive_failures))
     table.add_row("video_fps", str(s.video_fps))
     console.print(table)
+
+
+@app.command()
+def mcp(
+    transport: str = typer.Option("stdio", "--transport", help="传输方式: stdio / sse"),
+):
+    """启动 MCP 服务器，让其他 Agent（Claude Code / Hermes / OpenClaw）通过 MCP 协议调用桌面自动化。"""
+    from .mcp_server import main as mcp_main
+
+    console.print(f"[dim]启动 RegionCUA MCP 服务器（transport={transport}）…[/dim]")
+    mcp_main(transport=transport)
+
+
+@app.command()
+def bench(
+    list_tasks: bool = typer.Option(False, "--list", help="列出所有可用基准测试任务"),
+    task_name: str = typer.Option(None, "--task", help="运行指定任务"),
+    variant: int = typer.Option(0, "--variant", help="任务变体索引（从0开始）"),
+    all_tasks: bool = typer.Option(False, "--all", help="运行全部任务"),
+    output: str = typer.Option(None, "--output", help="结果输出 JSON 路径"),
+    backend: str = typer.Option("background", "--backend", help="截图后端：background（PrintWindow截窗口）或 foreground（截全屏）"),
+):
+    """运行 cua-bench 基准测试，评估 region-cua 的桌面操作能力。"""
+    from .bench.run_bench import bench_command
+
+    bench_command(
+        list_tasks=list_tasks,
+        task_name=task_name,
+        variant=variant,
+        all_tasks=all_tasks,
+        output=output,
+        backend=backend,
+    )
 
 
 def _fmt_size(n) -> str:
