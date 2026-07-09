@@ -413,6 +413,9 @@ def workflow_icon_click(executor, step) -> str:
 
     # 4. OmniParser 没找到，用 SAM3 检测 icon 区域
     try:
+        import sys as _sys
+        # 清除 Hermes 环境污染
+        _sys.path = [p for p in _sys.path if "hermes" not in p.lower()]
         from ..vision.sam3_analyzer import SAM3Analyzer
         analyzer = SAM3Analyzer()
         sam3_results = analyzer.segment(before, "icon", threshold=0.3)
@@ -503,6 +506,8 @@ def workflow_color_picker(executor, step) -> str:
 
     # 3. VLM 没找到，用 SAM3 检测 rectangle 区域（颜色方块）
     try:
+        import sys as _sys
+        _sys.path = [p for p in _sys.path if "hermes" not in p.lower()]
         from ..vision.sam3_analyzer import SAM3Analyzer
         analyzer = SAM3Analyzer()
         sam3_results = analyzer.segment(before, "rectangle", threshold=0.3)
