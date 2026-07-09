@@ -316,6 +316,12 @@ class BrowserSession:
         hwnd = self._find_window()
         if hwnd:
             _user32().PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+            # 等待窗口真正关闭（最多 3 秒）
+            t0 = time.time()
+            while time.time() - t0 < 3:
+                if not self._find_window():
+                    break
+                time.sleep(0.3)
         if self._temp_file and self._temp_file.exists():
             try:
                 self._temp_file.unlink()

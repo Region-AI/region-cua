@@ -311,7 +311,11 @@ class BenchRunner:
                     _time.sleep(2)
                     browser._activate_window()
                     _time.sleep(1)
-                    pre_screenshot = shot.capture_screen()
+                    try:
+                        pre_screenshot = shot.capture_screen()
+                    except Exception as exc:
+                        error = str(exc)[:200]
+                        raise
                 parser = OmniParser(box_threshold=0.01)
                 elements = parser.parse(pre_screenshot)
                 # 格式化元素列表给 planner（过滤浏览器 UI、标题、噪声，标注控件类型）
@@ -413,6 +417,8 @@ class BenchRunner:
                 f"score={result.score:.1f} steps={result.steps} "
                 f"duration={result.duration:.1f}s"
             )
+            # 任务间等待，确保浏览器窗口完全关闭
+            _time.sleep(2)
 
         return results
 
