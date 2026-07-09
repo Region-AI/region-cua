@@ -15,11 +15,23 @@ from typing import Optional
 def capture_screen():
     """前台截图：返回当前屏幕的 PIL.Image.Image。
 
-    带重试机制：screen grab failed 是 Windows 上的间歇性错误，
-    通常重试 1-2 次就能成功。
+    优先用 mss（更稳定，不受 GDI/显存状态影响），
+    退回 pyautogui（带重试）。
     """
-    import pyautogui
     import time as _time
+    # 方案1: mss（推荐，不依赖 GDI 对象）
+    try:
+        import mss
+        from PIL import Image as _Img
+        with mss.mss() as sct:
+            monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+            raw = sct.grab(monitor)
+            return _Img.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+    except Exception:
+        pass
+
+    # 方案2: pyautogui（带重试）
+    import pyautogui
     last_err = None
     for _ in range(3):
         try:
