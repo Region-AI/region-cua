@@ -418,7 +418,7 @@ class BenchRunner:
                 f"duration={result.duration:.1f}s"
             )
             # 任务间等待，确保浏览器窗口完全关闭
-            _time.sleep(2)
+            time.sleep(2)
 
         return results
 
