@@ -615,3 +615,118 @@
 - 切换中英文：`hotkey` "shift"
 - 切换输入法：`hotkey` "ctrl+shift" 或 `hotkey` "win+space"
 - 中英文标点切换：`hotkey` "ctrl+."
+
+### QQ（腾讯QQ）
+- 打开：`open_app` "qq"
+- 发送消息：`click` 联系人 -> `click` 输入框 -> `type` 消息 -> `hotkey` "enter"
+- 发送文件：`click` 联系人 -> `click` 文件传输图标 -> 选择文件
+- 截图：`hotkey` "ctrl+alt+a"（QQ截图）
+- 搜索联系人：`click` 搜索框 -> `type` 联系人名
+- 创建群聊：`click` "+" -> `click` "创建群聊" -> 选择联系人
+- 查看聊天记录：`click` 联系人 -> 右键 -> `click` "消息记录"
+
+### 钉钉（DingTalk）
+- 打开：`open_app` "dingtalk"
+- 发送消息：`click` 联系人/群 -> `click` 输入框 -> `type` 消息 -> `hotkey` "enter"
+- 发送文件：`click` 文件图标 -> 选择文件
+- 打电话：`click` 电话图标 -> `click` 联系人
+- 视频会议：`click` "会议" -> `click` "发起会议"
+- 审批：`click` "工作" -> `click` "审批" -> `click` 待审批项
+- 打卡：`click` "工作" -> `click` "考勤打卡"
+
+### 飞书（Lark/Feishu）
+- 打开：`open_app` "feishu" 或 `open_app` "lark"
+- 发送消息：`click` 联系人/群 -> `click` 输入框 -> `type` 消息 -> `hotkey` "enter"
+- @某人：`type` "@" -> `click` 联系人名
+- 发送文件：`click` "+" -> `click` "文件" -> 选择文件
+- 创建文档：`click` "云文档" -> `click` "+" -> `click` "文档"
+- 创建表格：`click` "云文档" -> `click` "+" -> `click` "表格"
+- 视频会议：`click` "视频会议" -> `click` "发起会议"
+- 日历：`click` "日历" -> `click` 时间段 -> `type` 会议标题
+- 任务：`click` "任务" -> `click` "新建任务"
+
+### 网易云音乐 / QQ音乐
+- 打开：`open_app` "cloudmusic" 或 `open_app` "qqmusic"
+- 搜索歌曲：`click` 搜索框 -> `type` 歌名 -> `hotkey` "enter"
+- 播放/暂停：`click` 播放按钮 或 `hotkey` "space"
+- 上一首/下一首：`click` 上一首/下一首按钮 或 `hotkey` "ctrl+left" / `hotkey` "ctrl+right"
+- 音量：`click` 音量图标 -> 拖拽滑块
+- 添加到歌单：右键歌曲 -> `click` "添加到歌单" -> `click` 歌单名
+- 下载：右键歌曲 -> `click` "下载"
+
+### 系统工具
+
+#### 注册表编辑器
+- 打开：`hotkey` "win+r" -> `type` "regedit" -> `hotkey` "enter"
+- 导航：左侧树展开 -> `click` 注册表项
+- 搜索：`hotkey` "ctrl+f" -> `type` 关键词 -> `hotkey` "enter"
+- 新建项：右键父项 -> `click` "新建" -> `click` "项"
+- 修改值：双击值名 -> `type` 新值 -> `click` "确定"
+- 导出：`hotkey` "ctrl+e" 或 `click` "文件" -> `click` "导出"
+
+#### 服务管理器
+- 打开：`hotkey` "win+r" -> `type` "services.msc" -> `hotkey` "enter"
+- 启动服务：右键服务 -> `click` "启动"
+- 停止服务：右键服务 -> `click` "停止"
+- 设置自动启动：右键服务 -> `click` "属性" -> `click` "启动类型" -> `click` "自动"
+- 重启服务：右键服务 -> `click` "重新启动"
+
+#### 磁盘管理
+- 打开：`hotkey` "win+x" -> `click` "磁盘管理" 或 `hotkey` "win+r" -> `type` "diskmgmt.msc"
+- 格式化分区：右键分区 -> `click` "格式化" -> `click` "确定"
+- 压缩卷：右键分区 -> `click` "压缩卷" -> `type` 压缩大小 -> `click` "压缩"
+- 扩展卷：右键分区 -> `click` "扩展卷" -> `click` "下一步" -> `click` "完成"
+
+#### 事件查看器
+- 打开：`hotkey` "win+r" -> `type` "eventvwr.msc" -> `hotkey` "enter"
+- 查看应用程序日志：`click` "Windows 日志" -> `click` "应用程序"
+- 查看系统日志：`click` "Windows 日志" -> `click` "系统"
+- 筛选日志：右键日志 -> `click` "筛选当前日志" -> 选择级别
+
+### 压缩工具
+
+#### 7-Zip
+- 打开：`open_app` "7z"
+- 解压：右键压缩文件 -> `click` "7-Zip" -> `click` "解压到..."
+- 压缩：右键文件/文件夹 -> `click` "7-Zip" -> `click` "添加到压缩包..."
+- 设置密码：压缩对话框 -> `type` 密码 -> `click` "确定"
+- 分卷压缩：压缩对话框 -> `click` "分卷大小" -> `type` 大小
+
+#### WinRAR
+- 打开：`open_app` "winrar"
+- 解压：右键压缩文件 -> `click` "解压到..."
+- 压缩：右键文件 -> `click` "添加到压缩文件..."
+- 设置密码：压缩对话框 -> `click` "设置密码" -> `type` 密码
+
+### PDF阅读器
+
+#### Adobe Acrobat / Reader
+- 打开：`open_app` "acrobat" 或 `open_app` "acrord32"
+- 打开文件：`hotkey` "ctrl+o" -> 选择PDF文件
+- 翻页：`hotkey` "page down" / `hotkey` "page up"
+- 放大/缩小：`hotkey` "ctrl+=" / `hotkey` "ctrl+-"
+- 搜索文字：`hotkey` "ctrl+f" -> `type` 关键词
+- 高亮：`click` 高亮工具 -> 拖选文字
+- 添加注释：`click` 注释工具 -> `click` 页面位置 -> `type` 注释
+- 打印：`hotkey` "ctrl+p"
+
+#### Edge PDF阅读
+- 用Edge打开PDF：右键PDF文件 -> `click` "打开方式" -> `click` "Microsoft Edge"
+- 翻页：`hotkey` "page down" / `hotkey` "page up" 或滚动
+- 搜索：`hotkey` "ctrl+f" -> `type` 关键词
+- 旋转：`hotkey` "ctrl+]" 顺时针 / `hotkey` "ctrl+[" 逆时针
+- 打印：`hotkey` "ctrl+p"
+
+### 远程桌面
+
+#### Windows 远程桌面（RDP）
+- 打开：`hotkey` "win+r" -> `type` "mstsc" -> `hotkey` "enter"
+- 连接：`type` 计算机名/IP -> `click` "连接" -> `type` 用户名 -> `type` 密码 -> `hotkey` "enter"
+- 全屏切换：`hotkey` "ctrl+alt+break"
+- 发送Ctrl+Alt+Del：`hotkey` "ctrl+alt+end"
+- 断开：关闭窗口 或 `hotkey` "alt+f4"
+
+#### TeamViewer / 向日葵
+- 打开：`open_app` "teamviewer" 或 `open_app` "sunlogin"
+- 远程控制：`type` 对方ID -> `click` "连接" -> `type` 密码 -> `hotkey` "enter"
+- 文件传输：`click` "文件传输" -> 选择文件 -> `click` "发送"
