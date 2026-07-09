@@ -221,7 +221,150 @@
 ### 记事本（Notepad）
 - 打开：`open_app` "notepad"
 - 输入：直接 `type`
-- 保存：`hotkey` "ctrl+s"（首次需 `type` 文件名 → `hotkey` "enter"）
-- 查找：`hotkey` "ctrl+f" → `type` 关键词
+- 保存：`hotkey` "ctrl+s"（首次需 `type` 文件名 -> `hotkey` "enter"）
+- 查找：`hotkey` "ctrl+f" -> `type` 关键词
 - 替换：`hotkey` "ctrl+h"
-- 自动换行：`click` "格式" → `click` "自动换行"
+- 自动换行：`click` "格式" -> `click` "自动换行"
+
+---
+
+## 复合控件
+
+### 标签页（tabs）
+- 点击标签标题切换到对应标签页
+- 生成1步：`click` 标签标题文字
+- 标签页切换后内容区域会变化，需要重新截图
+- 关闭标签页：`click` 标签上的关闭按钮（通常是 x 图标）
+
+### 对话框/模态框（dialog/modal）
+- 对话框弹出后背景通常变暗，需要先处理对话框才能操作其他区域
+- 确认对话框：`click` "确定"/"OK"/"确认"
+- 取消对话框：`click` "取消"/"Cancel" 或 `hotkey` "escape"
+- 对话框中可能有多个输入框，按 Tab 键切换焦点
+
+### 树形菜单（tree_view）
+- 展开/折叠节点：`click` 节点前的展开箭头（▶/▼）
+- 选择节点：`click` 节点文字
+- 嵌套层级：逐层展开到目标节点
+- 文件资源管理器的左侧导航树就是树形菜单
+
+### Toast 通知（toast/notification）
+- Toast 通知通常出现在屏幕右上角或右下角，几秒后自动消失
+- 如果需要操作 Toast 中的按钮，要快速 `click`
+- 关闭 Toast：`click` Toast 上的关闭按钮 或等待自动消失
+
+### 上下文菜单/弹出菜单（popup_menu）
+- 和右键菜单类似，但可能由左键点击触发
+- 菜单项是 DOM 元素，OmniParser 能检测到
+- 菜单弹出后需要重新截图才能定位菜单项
+- 关闭菜单：`hotkey` "escape" 或点击空白区域
+
+### 分页器（pagination）
+- 翻页：`click` "下一页"/"›" 或 `click` 页码数字
+- 跳转到指定页：`click` 页码输入框 -> `type` 页码 -> `hotkey` "enter"
+- 每页翻页后需要重新截图
+
+### 手风琴/折叠面板（accordion）
+- `click` 面板标题展开/折叠内容
+- 展开后内容区域出现新元素，需要重新截图
+- 同时只有一个面板展开时，展开新面板会自动折叠旧面板
+
+### 工具提示（tooltip）
+- 鼠标悬停在元素上时显示提示文字
+- Tooltip 不是可交互元素，不要点击它
+- 如果需要读取 tooltip 中的信息，先 `move_to` 目标元素 -> `screenshot`
+
+### 进度条/加载状态（progress_bar）
+- 等待进度完成：`wait` 2 秒 -> `screenshot` 检查是否完成
+- 如果进度条还在动，继续 `wait`
+- 如果进度条消失或显示完成，继续下一步操作
+
+---
+
+## 更多常见应用操作指南
+
+### Windows 任务管理器
+- 打开：`hotkey` "ctrl+shift+esc" 或 `hotkey` "ctrl+alt+delete" -> `click` "任务管理器"
+- 结束进程：`click` 进程名 -> `click` "结束任务"
+- 切换到详细信息：`click` "详细信息" 选项卡
+- 查看性能：`click` "性能" 选项卡
+- 查看启动项：`click` "启动" 选项卡
+
+### Windows 控制面板
+- 打开：`open_app` "control"
+- 程序和功能：`click` "程序" -> `click` "程序和功能"
+- 卸载程序：`click` 程序名 -> `click` "卸载"
+- 电源选项：`click` "硬件和声音" -> `click` "电源选项"
+- 设备管理器：`click` "硬件和声音" -> `click` "设备管理器"
+
+### Windows 截图工具
+- 截图工具：`hotkey` "win+shift+s"（选择截图区域）
+- 全屏截图：`hotkey` "prtscn"
+- 当前窗口截图：`hotkey` "alt+prtscn"
+- 截图后自动复制到剪贴板，可 `hotkey` "ctrl+v" 粘贴
+
+### 画图（Paint）
+- 打开：`open_app` "mspaint"
+- 画线：`click` "直线" 工具 -> 拖拽画线
+- 画矩形：`click` "矩形" 工具 -> 拖拽画矩形
+- 填充颜色：`click` "填充" 工具 -> `click` 颜色 -> `click` 填充区域
+- 选择颜色：`click` 颜色块
+- 调整画布大小：`click` "调整大小" -> `type` 宽度和高度 -> `click` "确定"
+- 保存：`hotkey` "ctrl+s"
+
+### 计算器
+- 打开：`open_app` "calc"
+- 输入数字：`type` 数字 或 `click` 计算器按钮
+- 运算：`type` 运算符 或 `click` 运算符按钮
+- 等于：`hotkey` "enter" 或 `click` "="
+- 清除：`hotkey` "escape" 或 `click` "C"
+- 切换模式：`click` 菜单 -> `click` "科学"/"程序员"
+
+### 时钟/闹钟
+- 打开：`open_app` "时钟"
+- 设置闹钟：`click` "闹钟" -> `click` "+" -> 设置时间 -> `click` "保存"
+- 计时器：`click` "计时器" -> `click` 设置时间 -> `click` "开始"
+- 秒表：`click` "秒表" -> `click` "开始"
+
+### Chrome 下载管理
+- 查看下载：`hotkey` "ctrl+j"
+- 暂停下载：`click` 下载项的暂停按钮
+- 取消下载：`click` 下载项的取消按钮
+- 打开下载文件：`click` 下载项 -> `click` "打开"
+- 在文件夹中显示：`click` 下载项 -> `click` "在文件夹中显示"
+
+### Chrome 标签页管理
+- 固定标签页：右键标签 -> `click` "固定标签页"
+- 标签页分组：右键标签 -> `click` "将标签页添加到新组"
+- 恢复关闭的标签页：`hotkey` "ctrl+shift+t"
+- 标签页静音：右键标签 -> `click` "将标签页静音"
+
+### VS Code
+- 打开：`open_app` "code"
+- 打开文件：`hotkey` "ctrl+o" -> 选择文件
+- 打开文件夹：`hotkey` "ctrl+k ctrl+o"
+- 搜索文件：`hotkey` "ctrl+p" -> `type` 文件名
+- 全局搜索：`hotkey` "ctrl+shift+f" -> `type` 关键词
+- 命令面板：`hotkey` "ctrl+shift+p" -> `type` 命令
+- 终端：`hotkey` "ctrl+`"
+- 格式化代码：`hotkey` "shift+alt+f"
+- 注释切换：`hotkey` "ctrl+/"
+- 保存：`hotkey` "ctrl+s"
+- 关闭标签：`hotkey` "ctrl+w"
+
+### 7-Zip / WinRAR（压缩工具）
+- 解压：右键压缩文件 -> `click` "解压到..." -> 选择路径 -> `click` "确定"
+- 压缩：右键文件/文件夹 -> `click` "添加到压缩文件..." -> `click` "确定"
+- 打开压缩文件：`open_app` "7z" -> `hotkey` "ctrl+o" -> 选择文件
+
+### Windows 搜索（Cortana/Search）
+- 打开搜索：`hotkey` "win+s" 或 `click` 任务栏搜索框
+- 搜索应用/文件：`type` 关键词 -> `hotkey` "enter" 或 `click` 结果
+- 搜索设置：`type` "设置:" + 关键词
+- 搜索文件：`type` "文件:" + 关键词
+
+### Windows 剪贴板历史
+- 打开：`hotkey` "win+v"
+- 粘贴历史项：`click` 历史项
+- 固定剪贴板项：`click` 项的固定按钮
+- 清除剪贴板：`click` "全部清除"
