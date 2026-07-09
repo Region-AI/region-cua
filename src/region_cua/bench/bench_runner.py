@@ -91,6 +91,26 @@ class BenchRunner:
                     "请先解锁屏幕再运行 bench。"
                 )
 
+    @staticmethod
+    def _prevent_sleep() -> object:
+        """防止屏幕锁定/休眠。返回一个 context 用于恢复。"""
+        import ctypes
+        # ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED = 0x80000003
+        ES_CONTINUOUS = 0x80000000
+        ES_SYSTEM_REQUIRED = 0x00000001
+        ES_DISPLAY_REQUIRED = 0x00000002
+        ctypes.windll.kernel32.SetThreadExecutionState(
+            ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+        )
+
+        class _SleepGuard:
+            def __exit__(self, *args):
+                # 恢复正常状态
+                ctypes.windll.kernel32.SetThreadExecutionState(
+                    ES_CONTINUOUS
+                )
+        return _SleepGuard()
+
     def list_tasks(self) -> list[str]:
         """列出所有可用的任务目录名。"""
         return sorted([
@@ -417,29 +437,31 @@ class BenchRunner:
         # 检测屏幕是否锁定（锁屏时截图只能拿到锁屏界面，所有任务都会失败）
         self._check_screen_unlocked()
 
-        results: list[BenchResult] = []
-        for name in task_names:
-            console_print(f"▶ 运行任务: {name} (backend={backend})")
-            try:
-                task = self.load_task(name, variant_index=0)
-            except Exception as exc:
-                results.append(BenchResult(
-                    task_id=name, description="", success=False,
-                    score=0.0, duration=0.0, steps=0, error=f"加载失败: {exc}",
-                ))
-                continue
+        # 防止屏幕在 bench 运行期间锁定/休眠
+        with self._prevent_sleep():
+            results: list[BenchResult] = []
+            for name in task_names:
+                console_print(f"▶ 运行任务: {name} (backend={backend})")
+                try:
+                    task = self.load_task(name, variant_index=0)
+                except Exception as exc:
+                    results.append(BenchResult(
+                        task_id=name, description="", success=False,
+                        score=0.0, duration=0.0, steps=0, error=f"加载失败: {exc}",
+                    ))
+                    continue
 
-            result = self.run_task(task, max_steps=max_steps, backend=backend)
-            results.append(result)
-            console_print(
-                f"  {'✅' if result.success else '❌'} "
-                f"score={result.score:.1f} steps={result.steps} "
-                f"duration={result.duration:.1f}s"
-            )
-            # 任务间等待，确保浏览器窗口完全关闭
-            time.sleep(2)
+                result = self.run_task(task, max_steps=max_steps, backend=backend)
+                results.append(result)
+                console_print(
+                    f"  {'✅' if result.success else '❌'} "
+                    f"score={result.score:.1f} steps={result.steps} "
+                    f"duration={result.duration:.1f}s"
+                )
+                # 任务间等待，确保浏览器窗口完全关闭
+                time.sleep(2)
 
-        return results
+            return results
 
 
 def console_print(msg: str) -> None:
