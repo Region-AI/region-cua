@@ -229,19 +229,114 @@ def workflow_date_picker(executor, step) -> str:
     except Exception as exc:
         executor.logger.info(f"年月区域定位失败: {exc}")
 
-    # 4. 重新截图，找目标年份（可能需要滚动）
-    # 年月选择视图可能显示多个年份，需要滚动找到目标年份
-    for _scroll_try in range(5):
-        if _find_and_click(target_year):
-            executor.logger.info(f"找到并点击年份: {target_year}")
-            break
-        # 没找到，滚动
-        inp.scroll(-5)
-        time.sleep(0.5)
-    else:
+    # 4. 重新截图，找目标年份（年月选择视图中年份列表可能需要滚动）
+    # 用布局分析理解年月选择视图结构
+    # Chrome 年月视图：顶部年份标签 + 月份网格(4x3) + 年份列表（可滚动）
+    year_found = False
+
+    # 先尝试当前视图
+    if _find_and_click(target_year, y_range=(250, 600)):
+        year_found = True
+        executor.logger.info(f"找到并点击年份: {target_year}")
+
+    # 当前视图没找到，用布局分析找年份列表和滚动条
+    if not year_found:
+        _move_cursor_away(inp)
+        ym_shot = executor._capture("workflow_dp_year_list")
+        try:
+            if not hasattr(executor, "_omniparser") or executor._omniparser is None:
+                from ..vision.omniparser import OmniParser
+                executor._omniparser = OmniParser(enable_vlm_icons=False)
+            ym_elements = executor._omniparser.parse(ym_shot)
+            # 用布局分析找年份列表
+            from ..vision.layout_analyzer import _cluster_elements, _detect_list
+            # 只看日历区域
+            cal_elements = [e for e in ym_elements
+                if 100 < e["center"][0] < 500 and 240 < e["center"][1] < 600]
+            clusters = _cluster_elements(cal_elements, max_gap=40)
+            year_list_bbox = None
+            for cluster in clusters:
+                texts = [e.get("text", "") for e in cluster]
+                # 年份列表：包含 "202" 开头的文字
+                if any(t.startswith("202") or t.startswith("201") for t in texts):
+                    lst = _detect_list(cluster)
+                    if lst and lst["count"] >= 3:
+                        year_list_bbox = lst["bbox"]
+                        executor.logger.info(f"找到年份列表: {lst['count']}个 bbox={year_list_bbox}")
+                        break
+
+            if year_list_bbox:
+                # 年份在列表上方，目标年份更早 -> 向上滚动
+                # 年份在列表下方，目标年份更晚 -> 向下滚动
+                # 判断方向：看列表中已有的年份
+                visible_years = []
+                for e in ym_elements:
+                    text = (e.get("text") or "").strip()
+                    if text.isdigit() and 2000 < int(text) < 2100:
+                        visible_years.append(int(text))
+                if visible_years:
+                    min_visible = min(visible_years)
+                    target_y = int(target_year)
+                    if target_y < min_visible:
+                        # 目标年份更早，向上滚动
+                        for _ in range(10):
+                            inp.scroll(8)
+                            time.sleep(0.5)
+                            if _find_and_click(target_year, y_range=(250, 600)):
+                                year_found = True
+                                executor.logger.info(f"向上滚动找到年份: {target_year}")
+                                break
+                    else:
+                        # 目标年份更晚，向下滚动
+                        for _ in range(10):
+                            inp.scroll(-8)
+                            time.sleep(0.5)
+                            if _find_and_click(target_year, y_range=(250, 600)):
+                                year_found = True
+                                executor.logger.info(f"向下滚动找到年份: {target_year}")
+                                break
+        except Exception as exc:
+            executor.logger.info(f"布局分析年份列表失败: {exc}")
+
+    # 兜底：盲滚
+    if not year_found:
+        for direction in [5, -5]:  # 先上后下
+            for _ in range(5):
+                inp.scroll(direction)
+                time.sleep(0.5)
+                if _find_and_click(target_year, y_range=(250, 600)):
+                    year_found = True
+                    executor.logger.info(f"兜底滚动找到年份: {target_year}")
+                    break
+            if year_found:
+                break
+    if not year_found:
         executor.logger.info(f"未找到目标年份: {target_year}")
 
-    # 5. 重新截图，找目标月份
+    # 5. 选完年份后会回到月历视图，需要重新点击年月区域展开月份选择
+    if year_found:
+        _move_cursor_away(inp)
+        ym_shot = executor._capture("workflow_dp_after_year")
+        try:
+            if not hasattr(executor, "_omniparser") or executor._omniparser is None:
+                from ..vision.omniparser import OmniParser
+                executor._omniparser = OmniParser(enable_vlm_icons=False)
+            ym_elements = executor._omniparser.parse(ym_shot)
+            for e in ym_elements:
+                text = (e.get("text") or "").strip()
+                # 找年月显示区域（如 "2024年01月" 或含目标年份的文字）
+                if (len(text) > 4 and len(text) < 20
+                        and target_year in text
+                        and e.get("center", (0, 0))[1] < 350):
+                    cx, cy = e["center"]
+                    inp.click_at(cx, cy)
+                    time.sleep(0.8)
+                    executor.logger.info(f"选完年份后重新点击年月区域: {text}")
+                    break
+        except Exception:
+            pass
+
+    # 6. 重新截图，找目标月份（年月视图中月份是网格按钮）
     # 月份可能是英文（January）或数字（1月），优先用长名匹配
     month_names = {
         "1": ["January", "Jan", "1月", "1"],
@@ -269,7 +364,7 @@ def workflow_date_picker(executor, step) -> str:
     if not month_found:
         executor.logger.info(f"未找到目标月份: {target_month}")
 
-    # 6. 重新截图，找目标日期数字
+    # 7. 重新截图，找目标日期数字
     day_int = int(target_day) if target_day.isdigit() else None
     if day_int:
         if _find_and_click(target_day):
