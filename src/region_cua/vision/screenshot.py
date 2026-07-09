@@ -13,9 +13,21 @@ from typing import Optional
 
 
 def capture_screen():
-    """前台截图：返回当前屏幕的 PIL.Image.Image。"""
-    import pyautogui  # 延迟导入：无桌面环境下导入模块本身不报错
-    return pyautogui.screenshot()
+    """前台截图：返回当前屏幕的 PIL.Image.Image。
+
+    带重试机制：screen grab failed 是 Windows 上的间歇性错误，
+    通常重试 1-2 次就能成功。
+    """
+    import pyautogui
+    import time as _time
+    last_err = None
+    for _ in range(3):
+        try:
+            return pyautogui.screenshot()
+        except Exception as e:
+            last_err = e
+            _time.sleep(0.5)
+    raise last_err
 
 
 def capture_window_bg(keyword: str):
