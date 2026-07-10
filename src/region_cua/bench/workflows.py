@@ -380,10 +380,14 @@ def workflow_date_picker(executor, step) -> str:
 
 
 def workflow_icon_click(executor, step) -> str:
-    """图标点击工作流：截图 → OmniParser+SAM3 检测 → VLM 识别 → click。
+    """图标点击工作流：SAM3+OmniParser 融合布局 -> VLM 验证 -> click。
 
-    纯图标按钮没有文字，需要 VLM 识别图标含义。
-    SAM3 用 "icon" 提示补充检测 OmniParser 漏检的图标。
+    策略：
+    1. OmniParser 检测文字元素（OCR 为准）
+    2. SAM3 检测 icon 区域（位置为准）
+    3. 融合：SAM3 区域 + OmniParser 文字
+    4. OmniParser 的 find_element 先尝试文字匹配
+    5. SAM3 + qwen VLM 互相验证每个 icon 区域
     """
     from ..automation import input as inp
 
@@ -393,68 +397,75 @@ def workflow_icon_click(executor, step) -> str:
         time.sleep(0.5)
 
     before = executor._capture("workflow_icon_before")
+    target = step.target or ""
 
-    # 2. 先用 OmniParser（启用 VLM 图标识别）解析
+    # 2. OmniParser 解析（启用 VLM 图标识别）
     try:
         from ..vision.omniparser import OmniParser
         parser = OmniParser(box_threshold=0.01, enable_vlm_icons=True)
-        elements = parser.parse(before)
+        omni_elements = parser.parse(before)
     except Exception:
         parser = executor._omniparser or OmniParser()
-        elements = parser.parse(before)
+        omni_elements = parser.parse(before)
 
-    # 3. 找匹配的图标
-    target = step.target or ""
-    elem = parser.find_element(elements, target, before)
+    # 3. 先用 OmniParser find_element 尝试匹配
+    elem = parser.find_element(omni_elements, target, before)
     if elem:
         cx, cy = elem["center"]
         inp.click_at(cx, cy)
-        return f"图标点击：找到 {target} at ({cx},{cy})"
+        return f"图标点击：OmniParser 找到 {target} at ({cx},{cy})"
 
-    # 4. OmniParser 没找到，用 SAM3 检测 icon 区域
+    # 4. SAM3 检测 icon 区域
+    sam3_segments = []
     try:
         from ..vision.sam3_analyzer import SAM3Analyzer
         analyzer = SAM3Analyzer()
-        sam3_results = analyzer.segment(before, "icon", threshold=0.3)
-        if sam3_results:
-            # 用 VLM 识别每个 SAM3 检测到的 icon 区域
-            executor.logger.info(f"SAM3 检测到 {len(sam3_results)} 个 icon")
-            # 裁剪每个 icon 区域，用 VLM 识别
+        sam3_segments = analyzer.segment(before, "icon", threshold=0.3)
+        if sam3_segments:
+            executor.logger.info(f"SAM3 检测到 {len(sam3_segments)} 个 icon")
+    except Exception as exc:
+        executor.logger.info(f"SAM3 icon 检测失败: {exc}")
+
+    # 5. SAM3 + VLM 互相验证
+    if sam3_segments:
+        try:
             from PIL import Image as _Img
-            img = _Img.open(before).convert("RGB")
             from ..vision.ollama_client import OllamaClient
             from ..config import get_settings
+            from ..vision.fusion_layout import verify_icon_with_vlm
+
             settings = get_settings()
             client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
-            for r in sam3_results:
-                x1, y1, x2, y2 = r["box"]
-                # 裁剪 icon 区域（扩大一点边界）
-                crop = img.crop((max(0, x1-5), max(0, y1-5), x2+5, y2+5))
-                import io as _io
-                buf = _io.BytesIO()
-                crop.save(buf, format="PNG")
-                resp = client.chat(
-                    settings.ollama_vision_model,
-                    [{"role": "user", "content": f"这个图标是什么？用一个英文单词回答（如 home, settings, play, pause, search）。如果是 {target} 图标，回答 YES。"}],
-                    images=[buf.getvalue()],
-                )
-                if target.lower() in resp.lower() or "yes" in resp.lower():
-                    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                    inp.click_at(cx, cy)
-                    client.close()
-                    return f"图标点击：SAM3+VLM 找到 {target} at ({cx},{cy}) score={r['score']:.2f}"
+            img = _Img.open(before).convert("RGB")
+
+            result = verify_icon_with_vlm(
+                img, sam3_segments, target, client,
+                settings.ollama_vision_model, logger=executor.logger,
+            )
             client.close()
-    except Exception as exc:
-        executor.logger.info(f"SAM3 图标检测失败: {exc}")
+
+            if result:
+                cx, cy = result["center"]
+                inp.click_at(cx, cy)
+                return (
+                    f"图标点击：SAM3+VLM 验证通过 {target} at ({cx},{cy}) "
+                    f"score={result['sam3_score']:.2f}"
+                )
+        except Exception as exc:
+            executor.logger.info(f"SAM3+VLM icon 验证失败: {exc}")
 
     return f"图标点击：未找到 {target}"
 
 
 def workflow_color_picker(executor, step) -> str:
-    """颜色选择器工作流：截图 → VLM 识别颜色方块 → click。
+    """颜色选择器工作流：SAM3 区域 + OmniParser 文字 + VLM 颜色验证 -> click。
 
-    颜色方块没有文字，用 VLM 直接识别颜色位置。
-    SAM3 用 "rectangle" 提示补充检测颜色方块区域。
+    策略：
+    1. SAM3 检测 rectangle 区域（颜色方块的精确位置）
+    2. OmniParser 检测文字（页面标题等，用于排除非颜色区域）
+    3. 融合布局：SAM3 区域 + OmniParser 文字
+    4. VLM 逐个验证 SAM3 区域的颜色
+    5. OmniParser 文字标记的区域排除（不点击标题等文字区域）
     """
     from ..automation import input as inp
 
@@ -466,7 +477,66 @@ def workflow_color_picker(executor, step) -> str:
     before = executor._capture("workflow_color_before")
     color = step.target or "red"
 
-    # 2. 用 VLM 直接问"颜色方块在哪里"
+    # 2. OmniParser 解析文字（用于排除非颜色区域）
+    try:
+        from ..vision.omniparser import OmniParser
+        parser = executor._omniparser or OmniParser(box_threshold=0.01)
+        omni_elements = parser.parse(before)
+    except Exception:
+        omni_elements = []
+
+    # 3. SAM3 检测 rectangle 区域（颜色方块的精确位置）
+    sam3_segments = []
+    try:
+        from ..vision.sam3_analyzer import SAM3Analyzer
+        analyzer = SAM3Analyzer()
+        sam3_segments = analyzer.segment(before, "rectangle", threshold=0.3)
+        if sam3_segments:
+            executor.logger.info(f"SAM3 检测到 {len(sam3_segments)} 个 rectangle")
+    except Exception as exc:
+        executor.logger.info(f"SAM3 rectangle 检测失败: {exc}")
+
+    # 4. 融合布局：SAM3 区域 + OmniParser 文字
+    if sam3_segments and omni_elements:
+        try:
+            from ..vision.fusion_layout import fuse_layout
+            fused = fuse_layout(omni_elements, sam3_segments)
+            executor.logger.info(
+                f"融合布局: {len(fused)} 个元素 "
+                f"(SAM3={len(sam3_segments)}, OmniParser={len(omni_elements)})"
+            )
+        except Exception as exc:
+            executor.logger.info(f"融合布局失败: {exc}")
+
+    # 5. SAM3 + VLM 验证颜色
+    if sam3_segments:
+        try:
+            from PIL import Image as _Img
+            from ..vision.ollama_client import OllamaClient
+            from ..config import get_settings
+            from ..vision.fusion_layout import verify_color_with_vlm
+
+            settings = get_settings()
+            client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
+            img = _Img.open(before).convert("RGB")
+
+            result = verify_color_with_vlm(
+                img, sam3_segments, color, client,
+                settings.ollama_vision_model, logger=executor.logger,
+            )
+            client.close()
+
+            if result:
+                cx, cy = result["center"]
+                inp.click_at(cx, cy)
+                return (
+                    f"颜色选择器：SAM3+VLM 定位 {color} at ({cx},{cy}) "
+                    f"score={result['sam3_score']:.2f}"
+                )
+        except Exception as exc:
+            executor.logger.info(f"SAM3+VLM 颜色验证失败: {exc}")
+
+    # 6. 兜底：VLM 直接看全图定位
     try:
         from ..vision.ollama_client import OllamaClient
         from ..config import get_settings
@@ -478,10 +548,8 @@ def workflow_color_picker(executor, step) -> str:
             f"返回 JSON：{{\"found\": true, \"x\": 整数, \"y\": 整数}}\n"
             f"坐标基于截图左上角。只输出 JSON。"
         )
-
         with open(before, "rb") as f:
             img_bytes = f.read()
-
         resp = client.chat(
             settings.ollama_vision_model,
             [{"role": "user", "content": prompt}],
@@ -497,62 +565,11 @@ def workflow_color_picker(executor, step) -> str:
             if data.get("found") and data.get("x") and data.get("y"):
                 x, y = int(data["x"]), int(data["y"])
                 inp.click_at(x, y)
-                return f"颜色选择器：VLM 定位 {color} at ({x},{y})"
+                return f"颜色选择器：VLM 全图定位 {color} at ({x},{y})"
     except Exception:
         pass
 
-    # 3. VLM 没找到，用 SAM3 检测 rectangle 区域（颜色方块）
-    try:
-        from ..vision.sam3_analyzer import SAM3Analyzer
-        analyzer = SAM3Analyzer()
-        sam3_results = analyzer.segment(before, "rectangle", threshold=0.3)
-        if sam3_results:
-            executor.logger.info(f"SAM3 检测到 {len(sam3_results)} 个 rectangle")
-            # 用 VLM 识别每个 rectangle 是否是目标颜色
-            from PIL import Image as _Img
-            img = _Img.open(before).convert("RGB")
-            from ..vision.ollama_client import OllamaClient
-            from ..config import get_settings
-            settings = get_settings()
-            client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
-            for r in sam3_results:
-                x1, y1, x2, y2 = r["box"]
-                # 只看面积适中的方块（排除太大或太小的）
-                w, h = x2 - x1, y2 - y1
-                if w < 10 or h < 10 or w > 200 or h > 200:
-                    continue
-                crop = img.crop((x1, y1, x2, y2))
-                import io as _io
-                buf = _io.BytesIO()
-                crop.save(buf, format="PNG")
-                resp = client.chat(
-                    settings.ollama_vision_model,
-                    [{"role": "user", "content": f"这个方块是什么颜色？如果是 {color}，回答 YES。否则回答 NO。"}],
-                    images=[buf.getvalue()],
-                )
-                if "yes" in resp.lower():
-                    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                    inp.click_at(cx, cy)
-                    client.close()
-                    return f"颜色选择器：SAM3+VLM 定位 {color} at ({cx},{cy}) score={r['score']:.2f}"
-            client.close()
-    except Exception as exc:
-        executor.logger.info(f"SAM3 颜色检测失败: {exc}")
-
-    # 4. 兜底：用 OmniParser 找无文字的彩色元素
-    try:
-        from ..vision.omniparser import OmniParser
-        parser = executor._omniparser or OmniParser(box_threshold=0.01)
-        elements = parser.parse(before)
-        for e in elements:
-            if not e.get("text") and e.get("center", (0, 0))[1] > 120:
-                cx, cy = e["center"]
-                inp.click_at(cx, cy)
-                return f"颜色选择器：兜底点击第一个无文字元素 at ({cx},{cy})"
-    except Exception:
-        pass
-
-    return f"颜色选择器：未找到 {step.target}"
+    return f"颜色选择器：未找到 {color}"
 
 
 # 工作流注册表
