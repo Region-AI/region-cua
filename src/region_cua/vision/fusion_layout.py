@@ -4,23 +4,30 @@
 1. 区域位置以 SAM3 为准（分割边界精确）
 2. 文字内容以 OmniParser 为准（OCR 识别准确）
 3. 图标识别用 SAM3 + qwen VLM 互相验证
+4. 输出区域间的拓扑关系（包含、相邻、接触/上下左右）
 
 输出统一的 elements 列表，每个元素包含：
-- bbox: 来自 SAM3 的精确分割边界
-- text: 来自 OmniParser OCR 的文字（如果有）
-- type: 控件类型推断
+- bbox: [x1, y1, x2, y2]
+- center: (x, y)
+- text: str (可能为空)
+- type: str
 - source: "sam3" / "omniparser" / "fused"
+- relationships: list of {"rel": "contains"/"adjacent"/"touches", "dir": "up/down/left/right", "target": index}
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Optional, Literal
 
 import numpy as np
 from PIL import Image
 
 _log = logging.getLogger(__name__)
+
+
+RelationshipType = Literal["contains", "contains_within", "adjacent", "touches"]
+DirectionType = Literal["up", "down", "left", "right", None]
 
 
 def _iou(box1: list[int], box2: list[int]) -> float:
@@ -50,6 +57,153 @@ def _overlap_ratio(small_box: list[int], big_box: list[int]) -> float:
     return inter / (small_area + 1e-6)
 
 
+def _get_direction(box1: list[int], box2: list[int]) -> DirectionType:
+    """计算 box1 相对于 box2 的方向。
+
+    Returns: "up" / "down" / "left" / "right" / None (相交或重合)
+    """
+    x1, y1, x2, y2 = box1
+    x3, y3, x4, y4 = box2
+
+    cx1, cy1 = (x1 + x2) // 2, (y1 + y2) // 2
+    cx2, cy2 = (x3 + x4) // 2, (y3 + y4) // 2
+
+    # 计算重叠区域
+    ox1 = max(x1, x3)
+    oy1 = max(y1, y3)
+    ox2 = min(x2, x4)
+    oy2 = min(y2, y4)
+
+    if ox1 < ox2 and oy1 < oy2:
+        # 有重叠（相交），不判断方向，因为它们在同一个区域
+        pass
+
+    dx = cx1 - cx2  # >0 表示 box1 在 box2 右边
+    dy = cy1 - cy2  # >0 表示 box1 在 box2 下边
+
+    if abs(dx) > abs(dy):
+        return "right" if dx > 0 else "left"
+    elif abs(dy) > abs(dx):
+        return "down" if dy > 0 else "up"
+    else:
+        # 对角线方向，返回主方向（哪个更大）
+        if dx > 0 and dy > 0:
+            return "right"
+        elif dx < 0 and dy < 0:
+            return "left"
+        elif dx > 0 and dy < 0:
+            return "right"
+        else:
+            return "up"
+
+
+def _compute_relationships(
+    elements: list[dict],
+    gap_threshold: float = 1.5,
+) -> dict[str, list[dict]]:
+    """计算所有元素之间的拓扑关系。
+
+    关系类型：
+    - contains: A 完全包含 B（B 的 bbox 在 A 内部）- 用于父子结构推断
+    - contains_within: B 完全包含 A（A 在 B 内部）- 与 contains 相反
+    - adjacent: 两个 bbox 距离很近但不重叠 - 表示并列关系
+    - touches: 边界接触（间隔 < box 宽度的 gap_threshold%）
+      - dir: "up"/"down"/"left"/"right"
+
+    Args:
+        elements: 带有 bbox 的元素列表
+        gap_threshold: 判定为 adjacent/touches 的最大间隙（box 尺寸的百分比）
+
+    Returns:
+        {element_index: [{"rel": str, "dir": str, "target": int, "gap": float, "overlap": float}]}
+    """
+    # 初始化关系字典
+    relationships = {i: [] for i in range(len(elements))}
+
+    gaps_thresholds_px = {}
+
+    for i, e1 in enumerate(elements):
+        box1 = e1["bbox"]
+        area1 = _bbox_area(box1) if "area" not in e1 else (
+            box1[2] - box1[0]) * (box1[3] - box1[1])  # type: ignore
+
+        for j, e2 in enumerate(elements):
+            if i == j:
+                continue
+            box2 = e2["bbox"]
+
+            # 计算 IoU（重叠程度）
+            iou_val = _iou(box1, box2)
+            overlap_e1_in_e2 = _overlap_ratio(box1, box2)
+            overlap_e2_in_e1 = _overlap_ratio(box2, box1)
+
+            # 1. check contains (e2 contains e1) or contained within (e1 contains e2)
+            if overlap_e1_in_e2 > 0.9:
+                # e1 的绝大部分在 e2 内 -> e1 contains_within e2
+                relationships[i].append({
+                    "rel": "contains_within",
+                    "dir": None,  # 包含没有方向
+                    "target": j,
+                    "overlap": overlap_e1_in_e2,
+                })
+            elif overlap_e2_in_e1 > 0.9:
+                # e2 的绝大部分在 e1 内 -> e1 contains e2
+                relationships[i].append({
+                    "rel": "contains",
+                    "dir": None,
+                    "target": j,
+                    "overlap": overlap_e2_in_e1,
+                })
+
+            # 2. check adjacent/touches (无重叠或极少重叠)
+            elif iou_val < 0.05:
+                # 计算最小间隙（px）
+                # left/right gap
+                if box1[2] <= box2[0]:  # e1 在 e2 左侧
+                    min_dx = box2[0] - box1[2]
+                elif box2[2] <= box1[0]:  # e1 在 e2 右侧
+                    min_dx = box1[0] - box2[2]
+                else:
+                    min_dx = 0
+
+                # up/down gap
+                if box1[3] <= box2[1]:  # e1 在 e2 上方
+                    min_dy = box2[1] - box1[3]
+                elif box2[3] <= box1[1]:  # e1 在 e2 下方
+                    min_dy = box1[1] - box2[3]
+                else:
+                    min_dy = 0
+
+                min_gap_px = max(min_dx, min_dy) if min_dx > 0 or min_dy > 0 else 0  # type: ignore
+
+                # check threshold (box dimension * gap_threshold / 100)
+                dim_factor = max(
+                    (box1[2] - box1[0]) * (box1[3] - box1[1]),
+                    (box2[2] - box2[0]) * (box2[3] - box2[1]),
+                )  # type: ignore
+                threshold = dim_factor * gap_threshold / 100
+
+                direction = _get_direction(box1, box2)
+
+                if min_gap_px <= 5:
+                    # touches (接触）
+                    rel_type = "touches"
+                elif min_gap_px <= threshold:
+                    rel_type = "adjacent"
+                else:
+                    continue  # not close enough
+
+                relationships[i].append({
+                    "rel": rel_type,
+                    "dir": direction,
+                    "target": j,
+                    "gap": float(min_gap_px),
+                    "overlap": iou_val,
+                })
+
+    return relationships
+
+
 def _bbox_center(box: list[int]) -> tuple[int, int]:
     return ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
 
@@ -65,7 +219,7 @@ def fuse_layout(
     img_height: int = 1080,
     iou_threshold: float = 0.3,
     overlap_threshold: float = 0.5,
-) -> list[dict]:
+) -> dict[str, object]:
     """融合 OmniParser 和 SAM3 的检测结果。
 
     融合规则：
@@ -84,14 +238,10 @@ def fuse_layout(
         overlap_threshold: 重叠占比阈值
 
     Returns:
-        融合后的元素列表，每个元素包含：
-        - bbox: [x1, y1, x2, y2]
-        - center: (x, y)
-        - text: str (可能为空)
-        - type: str
-        - source: "fused" / "sam3" / "omniparser"
-        - sam3_score: float (如果来自 SAM3)
-        - ocr_confidence: float (如果来自 OmniParser)
+        {
+            "elements": list[dict],  # 融合后的元素列表
+            "relationships": dict,   # 拓扑关系映射 (index -> [rel_dict])
+        }
     """
     fused: list[dict] = []
     matched_omni_indices: set[int] = set()
@@ -163,7 +313,14 @@ def fuse_layout(
 
     # 3. 按 y 坐标排序（方便 planner 阅读）
     fused.sort(key=lambda e: (e["center"][1], e["center"][0]))
-    return fused
+
+    # 4. 计算拓扑关系
+    relationships = _compute_relationships(fused)
+
+    return {
+        "elements": fused,
+        "relationships": relationships,
+    }
 
 
 def verify_icon_with_vlm(

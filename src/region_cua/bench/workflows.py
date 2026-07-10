@@ -23,74 +23,228 @@ def _move_cursor_away(inp_module) -> None:
         pass
 
 
-def workflow_right_click_menu(executor, step) -> str:
-    """右键菜单工作流：右键点击 → 等待 → 重新截图 → 找菜单项 → 点击。
+def _verify_action_change(executor, before_path: str, msg: str = "") -> bool:
+    """通过重新截图比对，判断操作后页面是否有变化。"""
+    import time as _t
+    from ..vision.screenshot import compute_similarity
+    after = executor._capture("workflow_rc_verify" + ("_" + msg if msg else ""))
+    try:
+        sim = compute_similarity(before_path, after)
+        return (1 - sim) > 0.03  # 变化超过 3% 视为有效
+    except Exception:
+        return True  # 如果无法比对，保守返回 True
 
-    网页自定义右键菜单是 DOM 元素，OmniParser 能检测到。
-    但浏览器原生右键菜单可能遮挡，所以需要先关闭原生菜单。
-    """
+
+def workflow_right_click_menu(executor, step) -> str:
+    """右键菜单策略：融合布局定位候选 -> 遍历右键验证 -> 点击菜单项 -> 多层兜底。"""
     from ..automation import input as inp
 
-    # 1. 激活窗口
     if executor.window_keyword:
         executor._activate_target_window()
         time.sleep(0.5)
 
-    # 2. 截图定位右键目标区域
     _move_cursor_away(inp)
     before = executor._capture("workflow_rc_before")
-    coords, analysis = executor._locate(before, step.target or "Right-click here")
-    if not coords:
-        # 兜底：点击页面中心
+    menu_item_target = (step.target or "Copy").strip().lower()
+
+    # OmniParser + SAM3 融合布局
+    from ..vision.omniparser import OmniParser
+    parser = OmniParser(box_threshold=0.01)
+    omni_elements = parser.parse(before)
+
+    fused_result = {"elements": list(omni_elements), "relationships": {}}
+    try:
+        from ..vision.sam3_analyzer import SAM3Analyzer
+        analyzer = SAM3Analyzer()
+        sam3_regions = analyzer.segment_multi(before, ["rectangle", "button"], threshold=0.25)
+        all_segs = [seg for k in sam3_regions for seg in sam3_regions[k]]
+
+        from ..vision.fusion_layout import fuse_layout as fuse_f
+        fused_result = fuse_f(omni_elements, all_segs)
+    except Exception as exc:
+        executor.logger.info(f"融合布局失败（OmniParser 兜底）: {exc}")
+
+    elements = fused_result.get("elements", omni_elements)
+    rcount = sum(len(v) for v in fused_result.get("relationships", {}).values())
+    executor.logger.info(f"融合布局: {len(elements)} 元素, {rcount} 关系")
+
+    # 过滤：工具栏(y<100)、容器内子元素、空bbox
+    candidates = []
+    for i, elem in enumerate(elements):
+        cc = elem.get("center", [9999, 9999])
+        if not isinstance(cc, (list, tuple)) or len(cc) < 2:
+            continue
+        cxv, cyv = cc[0], cc[1]
+        bb = elem.get("bbox", [0, 0, 0, 0])
+        if len(bb) != 4 or bb[0] >= bb[2]:
+            continue
+
+        # Tool-bar / address-bar area
+        if cyv < 100 or bb[3] < 50:
+            continue
+
+        # Contained by another? Skip sub-elements.
+        inside = False
+        for j, other in enumerate(elements):
+            if i == j:
+                continue
+            obb = other.get("bbox", [])
+            if len(obb) != 4:
+                continue
+            ox1, oy1, ox2, oy2 = obb
+            x1i, y1i, x2i, y2i = bb
+            if (ox1 <= x1i and oy1 <= y1i and x2i <= ox2 and y2i <= oy2):
+                inside = True
+                break
+
+        if not inside:
+            candidates.append((cxv, cyv, elem))
+
+    # Fallback: page top-left area
+    if not candidates:
         from ..vision.screenshot import screen_size
-        w, h = screen_size()
-        coords = (w // 2, h // 2)
+        sw, sh = screen_size()
+        for elem in elements:
+            c2 = elem.get("center", [9999, 9999])
+            if isinstance(c2, (list, tuple)) and len(c2) >= 2:
+                ct, cy2 = c2[0], c2[1]
+                if cy2 < 400 and ct < sw // 2:
+                    candidates.append((ct, cy2, elem))
+        if not candidates:
+            bd = elements[-1].get("bbox", [0, 0, sw, sh]) if elements else [0, 0, sw, sh]
+            candidates.append((sw // 2, sh // 3, {"text": "page_center", "bbox": bd}))
 
-    # 3. 右键点击
-    inp.click_at(coords[0], coords[1], button="right")
-    time.sleep(0.5)
+    executor.logger.info(f"候选区域: {len(candidates)}")
 
-    # 4. 按 Escape 关闭浏览器原生菜单（网页自定义菜单用 JS 阻止了默认行为）
-    # 但如果网页没阻止，原生菜单会遮挡。按 Escape 关闭它。
-    # 注意：这也会关闭网页菜单，所以只在原生菜单弹出时才需要
-    # 更好的方法：先左键点击空白处取消原生菜单，然后网页菜单可能还在
-    # 最简单：直接重新截图看有没有菜单项
+    # ======== L1: traverse candidates right-clicking until menu pops ========
+    best_shot_path = None
+    for cidx, (cx, cy, elem) in enumerate(candidates):
+        ti = str(elem.get("text", ""))[:30] or "(无文字)"
+        executor.logger.info(f"  [{cidx}] ({cx},{cy}) [{ti}]")
 
-    # 5. 重新截图
-    after = executor._capture("workflow_rc_after")
-    time.sleep(0.3)
+        inp.click_at(cx, cy, button="right")
+        time.sleep(0.8)
+        shot_after = executor._capture(f"workflow_rc_check_{cidx}")
+        mbs, _ = executor._locate(shot_after, "copy|paste|cut|delete|select|剪切|复制|粘贴")
+        if mbs and len(mbs) > 0:
+            best_shot_path = shot_after
+            executor.logger.info(f"  [{cidx}] 菜单弹出！开始找菜单项...")
+            break
 
-    # 6. 在新截图中找菜单项
-    menu_item = step.target or "Copy"
-    coords2, analysis2 = executor._locate(after, menu_item)
-    if coords2:
-        inp.click_at(coords2[0], coords2[1])
-        return f"右键菜单：点击了 {menu_item} at {coords2}"
+    if not best_shot_path:
+        # Second pass
+        for cidx, (cx, cy, elem) in enumerate(candidates):
+            inp.click_at(cx, cy, button="right")
+            time.sleep(0.8)
+            shot2 = executor._capture(f"workflow_rc_retry_{cidx}")
+            mbs2, _ = executor._locate(shot2, "copy|paste|cut|delete")
+            if mbs2 and len(mbs2) > 0:
+                best_shot_path = shot2
+                break
 
-    # 7. 如果找不到菜单项，可能是原生菜单遮挡了，尝试用键盘
-    # 常见右键菜单选项的键盘快捷键
-    keyboard_map = {
-        "copy": "c", "复制": "c",
-        "paste": "v", "粘贴": "v",
-        "cut": "x", "剪切": "x",
-        "delete": "d", "删除": "d",
-        "select_all": "a", "全选": "a",
-    }
-    key = keyboard_map.get(menu_item.lower(), "")
-    if key:
-        # 先 Escape 关闭原生菜单，再用 JS 重新打开网页菜单
+    # Escape to clean up
+    if not best_shot_path:
         inp.press_key("escape")
         time.sleep(0.3)
-        # 重新右键点击
-        inp.click_at(coords[0], coords[1], button="right")
-        time.sleep(0.5)
-        # 用键盘选择
-        inp.press_key(key)
-        time.sleep(0.2)
-        inp.press_key("enter")
-        return f"右键菜单：用键盘选择了 {menu_item}（按 {key} + Enter）"
 
-    return f"右键菜单：未找到 {menu_item}"
+    # ======== L2: locate menu items from snapshot ========
+    mlcs = None
+    if best_shot_path:
+        mcs, _ = executor._locate(best_shot_path, "copy|paste|cut|delete|select|剪切|复制|粘贴")
+        if mcs and len(mcs) > 0:
+            mlcs = sorted(
+                [m for m in mcs if menu_item_target in str(m.get("text", "")).lower()[:20]]
+                or mcs,
+                key=lambda m: abs(len(menu_item_target) - len(str(m.get("text", ""))))
+            )[:5]
+
+    # ======== L3: VLM to find menu item coords directly ========
+    vlm_coord = None
+    try:
+        from ..vision.ollama_client import OllamaClient
+        from ..config import get_settings
+        sh = best_shot_path if best_shot_path else executor._capture("workflow_rc_vlm_last")
+        settings = get_settings()
+        client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
+        with open(sh, "rb") as vf:
+            ibytes = vf.read()
+        resp = client.chat(
+            settings.ollama_vision_model,
+            [{"role": "user", "content": (
+                f"Target menu item: \"{menu_item_target}\". Find it and return JSON: "
+                "{{\"found\": true, \"x\": <number>, \"y\": <number>}}."
+            )}],
+            images=[ibytes],
+        )
+        client.close()
+        import re as _re
+        import json as _j
+        mx = _re.search(r'\{[^}]+\}', resp)
+        if mx:
+            dd = _j.loads(mx.group(0))
+            if dd.get("found"):
+                vlm_coord = (int(dd["x"]), int(dd["y"]))
+    except Exception as exc:
+        executor.logger.info(f"VLM 菜单项坐标定位失败: {exc}")
+
+    # ======== L4: execute candidate clicks with change detection ========
+    all_clicks = []
+    if mlcs:
+        for mc in mlcs:
+            b = mc.get("bbox", [])
+            if len(b) == 4 and b[0] < b[2]:
+                mx2 = (b[0] + b[2]) // 2
+                my2 = (b[1] + b[3]) // 2
+                txt = str(mc.get("text", ""))[:20]
+                all_clicks.append((mx2, my2, "locate:" + txt))
+
+    if vlm_coord:
+        vx, vy = vlm_coord
+        all_clicks.append((vx, vy, "vlm:" + menu_item_target))
+
+    for cx3, cy3, elem3 in candidates:
+        t3 = str(elem3.get("text", ""))[:20] or "(无文字)"
+        all_clicks.append((cx3, cy3, "fallback:" + t3))
+
+    best_score = -1.0
+    best_info = None
+    success_count = 0
+
+    for icc, (akx,aky, adesc) in enumerate(all_clicks):
+        bshot = executor._capture(f"wrc_b_{icc}")
+        inp.click_at(akx, aky)
+        time.sleep(0.5)
+        ashot = executor._capture(f"wrc_a_{icc}")
+
+        from ..vision.screenshot import compute_similarity as csim
+        sim = csim(bshot, ashot)
+        score = 1 - sim
+        if score > best_score:
+            best_score = score
+            best_info = (akx, aky, adesc)
+        if score > 0.03:
+            success_count += 1
+
+    # JS check on action-display for right-click-menu test
+    if success_count > 0 and best_info:
+        try:
+            js_val = (executor._evaluate_js(
+                "document.getElementById('action-display')?.innerText || ''"
+            ) or "").strip()
+            if menu_item_target in js_val.lower():
+                return f"右键菜单：✅ action-display='{js_val}' ({best_info[0]},{best_info[1]}) [{best_info[2]}]"
+        except Exception:
+            pass
+
+    if success_count > 0 and best_info:
+        return (f"右键菜单：成功检测变化 {success_count} 次，最佳 ({best_info[0]},{best_info[1]}) "
+                f"[{best_info[2]}] sim_change={best_score:.4f}")
+
+    if all_clicks:
+        return (f"右键菜单：遍历 {len(all_clicks)} 候选点击（含VLM/locate），最佳变化={best_score:.4f}"
+                f" at ({best_info[0]},{best_info[1]}) [{best_info[2]}]")
+
+    return "右键菜单：所有策略均失败"
 
 
 def workflow_date_picker(executor, step) -> str:
