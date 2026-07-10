@@ -104,6 +104,8 @@ class BenchRunner:
         )
 
         class _SleepGuard:
+            def __enter__(self):
+                return self
             def __exit__(self, *args):
                 # 恢复正常状态
                 ctypes.windll.kernel32.SetThreadExecutionState(
