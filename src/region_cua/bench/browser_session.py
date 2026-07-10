@@ -244,8 +244,8 @@ class BrowserSession:
         if not hwnd:
             return
         user32 = _user32()
-        # SW_RESTORE = 9（如果最小化则恢复）
-        user32.ShowWindow(hwnd, 9)
+        # 先用 SW_SHOW (5) 确保窗口可见（不用 SW_RESTORE 避免恢复最大化）
+        user32.ShowWindow(hwnd, 5)
         time.sleep(0.3)
         # MoveWindow(hwnd, x, y, width, height, repaint=True)
         # 减去标题栏/边框的额外高度（约 60px），让客户区接近 window_height
@@ -257,14 +257,15 @@ class BrowserSession:
 
         Windows 不允许后台进程直接抢前台，需要用 Alt 键技巧绕过限制：
         先模拟按 Alt 键（让系统认为用户在操作），再调 SetForegroundWindow。
+        注意：不能用 ShowWindow(SW_RESTORE)，因为会把窗口恢复到最大化，
+        覆盖 _resize_window 的效果。
         """
         hwnd = self._find_window()
         if not hwnd:
             return
         user32 = _user32()
-        # SW_RESTORE = 9
-        user32.ShowWindow(hwnd, 9)
-        time.sleep(0.2)
+        # 不调 SW_RESTORE，避免覆盖 resize 结果
+        # 只用 SetForegroundWindow + BringWindowToTop
 
         # Alt 键技巧：按一下 Alt 释放前台锁
         import ctypes

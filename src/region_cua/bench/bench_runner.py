@@ -340,6 +340,7 @@ class BenchRunner:
 
                 # 截图 + OmniParser 解析当前页面元素，给规则规划器提供元素列表
                 browser._activate_window()
+                browser._resize_window()  # 确保窗口大小正确（activate 可能改变窗口状态）
                 _time.sleep(1)
                 from ..automation import input as _inp
                 _move_cursor_away_bench(_inp)
@@ -384,6 +385,7 @@ class BenchRunner:
 
                 # planner 调用后重新激活浏览器窗口（planner 耗时数秒，窗口可能被遮挡）
                 browser._activate_window()
+                browser._resize_window()  # 确保窗口大小正确（activate 可能改变窗口状态）
                 _time.sleep(1)
 
                 task_dir = self.output_dir / task.task_id
