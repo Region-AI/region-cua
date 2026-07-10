@@ -205,6 +205,10 @@ def verify_icon_with_vlm(
         # icon 区域应该比较小
         if w < 10 or h < 10 or w > 200 or h > 200:
             continue
+        # 过滤浏览器工具栏区域（y < 100 的都是地址栏/标签栏）
+        cy = (y1 + y2) // 2
+        if cy < 100:
+            continue
 
         crop = image.crop((max(0, x1 - 5), max(0, y1 - 5), x2 + 5, y2 + 5))
         buf = _io.BytesIO()
@@ -299,6 +303,10 @@ def verify_color_with_vlm(
         # 宽高比应该接近 1（颜色方块）
         aspect = w / h if h > 0 else 0
         if aspect < 0.3 or aspect > 3.0:
+            continue
+        # 过滤浏览器工具栏区域（y < 100 的都是地址栏/标签栏）
+        cy = (y1 + y2) // 2
+        if cy < 100:
             continue
 
         candidates.append(seg)
