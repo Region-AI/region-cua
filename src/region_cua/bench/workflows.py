@@ -47,28 +47,42 @@ def workflow_right_click_menu(executor, step) -> str:
     before = executor._capture("workflow_rc_before")
     menu_item_target = (step.target or "Copy").strip().lower()
 
-    # OmniParser + SAM3 融合布局
-    from ..vision.omniparser import OmniParser
-    parser = OmniParser(box_threshold=0.01)
-    omni_elements = parser.parse(before)
-
-    fused_result = {"elements": list(omni_elements), "relationships": {}}
+    # SAM3 bbox → ROI crop → qwen类型识别 (替代旧的 SAM3+fuse_layout)
+    fused_result = {"elements": [], "relationships": {}}
+    fallback_elements = []
     try:
-        from ..vision.sam3_analyzer import SAM3Analyzer
-        analyzer = SAM3Analyzer()
-        sam3_regions = analyzer.segment_multi(before, ["rectangle", "button"], threshold=0.25)
-        all_segs = [seg for k in sam3_regions for seg in sam3_regions[k]]
+        from ..vision.omniparser import OmniParser
+        omni_parser = OmniParser(box_threshold=0.01)
+        fallback_elements = omni_parser.parse(before)
 
-        from ..vision.fusion_layout import fuse_layout as fuse_f
-        fused_result = fuse_f(omni_elements, all_segs)
+        # 尝试新融合管道 (SAM3 ROI → qwen)，回退到 OmniParser
+        try:
+            from ..config import get_settings
+            settings = get_settings()
+            from ..vision.fused_layout import analyze_sam3_roi_qwen
+            from ..vision.ollama_client import OllamaClient
+            client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
+            fused_result = analyze_sam3_roi_qwen(before, client, "qwen3.5:0.8b")
+            client.close()
+        except Exception as fast_exc:
+            # 快速回退：只跑一次 SAM3 rectangle（不用segment_multi两次）
+            from ..vision.sam3_analyzer import SAM3Analyzer
+            try:
+                analyzer = SAM3Analyzer()
+                sam3_rects = analyzer.segment(before, "rectangle", threshold=0.25)
+                from ..vision.fusion_layout import fuse_layout as old_fuse
+                fused_result = old_fuse(fallback_elements, sam3_rects) if sam3_rects else {"elements": fallback_elements, "relationships": {}}
+            except Exception:
+                pass
+
     except Exception as exc:
         executor.logger.info(f"融合布局失败（OmniParser 兜底）: {exc}")
 
-    elements = fused_result.get("elements", omni_elements)
+    elements = fused_result.get("elements") or fallback_elements
     rcount = sum(len(v) for v in fused_result.get("relationships", {}).values())
     executor.logger.info(f"融合布局: {len(elements)} 元素, {rcount} 关系")
 
-    # 过滤：工具栏(y<100)、容器内子元素、空bbox
+    # 过滤：工具栏(y<100)、容器内子元素、空bbox。限制最多8个候选省时间。
     candidates = []
     for i, elem in enumerate(elements):
         cc = elem.get("center", [9999, 9999])
@@ -78,11 +92,9 @@ def workflow_right_click_menu(executor, step) -> str:
         bb = elem.get("bbox", [0, 0, 0, 0])
         if len(bb) != 4 or bb[0] >= bb[2]:
             continue
-
         # Tool-bar / address-bar area
         if cyv < 100 or bb[3] < 50:
             continue
-
         # Contained by another? Skip sub-elements.
         inside = False
         for j, other in enumerate(elements):
@@ -96,9 +108,14 @@ def workflow_right_click_menu(executor, step) -> str:
             if (ox1 <= x1i and oy1 <= y1i and x2i <= ox2 and y2i <= oy2):
                 inside = True
                 break
-
         if not inside:
             candidates.append((cxv, cyv, elem))
+
+    # 如果太多候选，只保留前8个（省时间）
+    MAX_CANDIDATES = 8
+    if len(candidates) > MAX_CANDIDATES:
+        executor.logger.info(f"候选过多({len(candidates)}→{MAX_CANDIDATES})，截取前8个")
+        candidates = candidates[:MAX_CANDIDATES]
 
     # Fallback: page top-left area
     if not candidates:
@@ -114,80 +131,66 @@ def workflow_right_click_menu(executor, step) -> str:
             bd = elements[-1].get("bbox", [0, 0, sw, sh]) if elements else [0, 0, sw, sh]
             candidates.append((sw // 2, sh // 3, {"text": "page_center", "bbox": bd}))
 
-    executor.logger.info(f"候选区域: {len(candidates)}")
+    executor.logger.info(f"候选区域用于右键遍历: {len(candidates)}")
 
-    # ======== L1: traverse candidates right-clicking until menu pops ========
+    # ======== L1: 遍历候选右键直到菜单弹出（用截图差异检测，不用全量OCR解析）========
+    from ..vision.screenshot import compute_similarity as _csim
     best_shot_path = None
     for cidx, (cx, cy, elem) in enumerate(candidates):
-        ti = str(elem.get("text", ""))[:30] or "(无文字)"
-        executor.logger.info(f"  [{cidx}] ({cx},{cy}) [{ti}]")
+        ti = str(elem.get("text", ""))[:30] or "(no text)"
+        executor.logger.info(f"  [L1 try {cidx}] ({cx},{cy}) [{ti}]")
 
         inp.click_at(cx, cy, button="right")
-        time.sleep(0.8)
+        time.sleep(0.5)
         shot_after = executor._capture(f"workflow_rc_check_{cidx}")
-        mbs, _ = executor._locate(shot_after, "copy|paste|cut|delete|select|剪切|复制|粘贴")
-        if mbs and len(mbs) > 0:
-            best_shot_path = shot_after
-            executor.logger.info(f"  [{cidx}] 菜单弹出！开始找菜单项...")
-            break
-
-    if not best_shot_path:
-        # Second pass
-        for cidx, (cx, cy, elem) in enumerate(candidates):
-            inp.click_at(cx, cy, button="right")
-            time.sleep(0.8)
-            shot2 = executor._capture(f"workflow_rc_retry_{cidx}")
-            mbs2, _ = executor._locate(shot2, "copy|paste|cut|delete")
-            if mbs2 and len(mbs2) > 0:
-                best_shot_path = shot2
+        # 用截图差异代替全量OCR：菜单弹出=画面变化>5%
+        try:
+            changed_sim = _csim(before, shot_after)
+            if (1 - changed_sim) > 0.05:
+                best_shot_path = shot_after
+                executor.logger.info(f"  [L1 HIT] screenshot changed={changed_sim:.4f}, menu likely popped")
                 break
+        except Exception:
+            pass
 
-    # Escape to clean up
-    if not best_shot_path:
-        inp.press_key("escape")
-        time.sleep(0.3)
-
-    # ======== L2: locate menu items from snapshot ========
-    mlcs = None
     if best_shot_path:
-        mcs, _ = executor._locate(best_shot_path, "copy|paste|cut|delete|select|剪切|复制|粘贴")
-        if mcs and len(mcs) > 0:
-            mlcs = sorted(
-                [m for m in mcs if menu_item_target in str(m.get("text", "")).lower()[:20]]
-                or mcs,
-                key=lambda m: abs(len(menu_item_target) - len(str(m.get("text", ""))))
-            )[:5]
+        # 菜单弹出了！从融合元素的text里直接找目标——不用全图OCR
+        target_matches = [e for e in elements if menu_item_target in (e.get("text") or "").lower()]
+        mlcs = sorted(
+            target_matches,
+            key=lambda m: len((m.get("text") or "").strip())
+        )[:5]
 
-    # ======== L3: VLM to find menu item coords directly ========
+    # ======== L2: VLM 找菜单目标项坐标 ========
     vlm_coord = None
-    try:
-        from ..vision.ollama_client import OllamaClient
-        from ..config import get_settings
-        sh = best_shot_path if best_shot_path else executor._capture("workflow_rc_vlm_last")
-        settings = get_settings()
-        client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
-        with open(sh, "rb") as vf:
-            ibytes = vf.read()
-        resp = client.chat(
-            settings.ollama_vision_model,
-            [{"role": "user", "content": (
-                f"Target menu item: \"{menu_item_target}\". Find it and return JSON: "
-                "{{\"found\": true, \"x\": <number>, \"y\": <number>}}."
-            )}],
-            images=[ibytes],
-        )
-        client.close()
-        import re as _re
-        import json as _j
-        mx = _re.search(r'\{[^}]+\}', resp)
-        if mx:
-            dd = _j.loads(mx.group(0))
-            if dd.get("found"):
-                vlm_coord = (int(dd["x"]), int(dd["y"]))
-    except Exception as exc:
-        executor.logger.info(f"VLM 菜单项坐标定位失败: {exc}")
+    if best_shot_path and (not mlcs):
+        try:
+            from ..vision.ollama_client import OllamaClient
+            from ..config import get_settings
+            settings = get_settings()
+            client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
+            with open(best_shot_path, "rb") as vf:
+                ibytes = vf.read()
+            resp = client.chat(
+                settings.ollama_vision_model,
+                [{"role": "user", "content": (
+                    f"Target menu item: \"{menu_item_target}\". Find it and return JSON: "
+                    "{{\"found\": true, \"x\": <number>, \"y\": <number>}}."
+                )}],
+                images=[ibytes],
+            )
+            client.close()
+            import re as _re
+            import json as _j
+            mx = _re.search(r'\{[^}]+\}', resp)
+            if mx:
+                dd = _j.loads(mx.group(0))
+                if dd.get("found"):
+                    vlm_coord = (int(dd["x"]), int(dd['y']))
+        except Exception as exc:
+            executor.logger.info(f"VLM 菜单项坐标定位失败: {exc}")
 
-    # ======== L4: execute candidate clicks with change detection ========
+    # ======== L3: 执行点击 + 截图变化验证 ========
     all_clicks = []
     if mlcs:
         for mc in mlcs:
@@ -196,28 +199,27 @@ def workflow_right_click_menu(executor, step) -> str:
                 mx2 = (b[0] + b[2]) // 2
                 my2 = (b[1] + b[3]) // 2
                 txt = str(mc.get("text", ""))[:20]
-                all_clicks.append((mx2, my2, "locate:" + txt))
+                all_clicks.append((mx2, my2, "fusion:" + txt))
 
     if vlm_coord:
         vx, vy = vlm_coord
-        all_clicks.append((vx, vy, "vlm:" + menu_item_target))
+        all_clicks.insert(0, (vx, vy, "vlm:" + menu_item_target))  # VLM优先
 
-    for cx3, cy3, elem3 in candidates:
-        t3 = str(elem3.get("text", ""))[:20] or "(无文字)"
-        all_clicks.append((cx3, cy3, "fallback:" + t3))
+    for cx3, cy3, elem3 in candidates[:5]:
+        t3 = str(elem3.get("text", ""))[:20] or "(no text)"
+        all_clicks.append((cx3, cy3, "candidate_fallback:" + t3))
 
     best_score = -1.0
     best_info = None
     success_count = 0
 
-    for icc, (akx,aky, adesc) in enumerate(all_clicks):
+    for icc, (akx, aky, adesc) in enumerate(all_clicks):
         bshot = executor._capture(f"wrc_b_{icc}")
         inp.click_at(akx, aky)
-        time.sleep(0.5)
+        time.sleep(0.4)
         ashot = executor._capture(f"wrc_a_{icc}")
 
-        from ..vision.screenshot import compute_similarity as csim
-        sim = csim(bshot, ashot)
+        sim = _csim(bshot, ashot)
         score = 1 - sim
         if score > best_score:
             best_score = score
@@ -241,12 +243,10 @@ def workflow_right_click_menu(executor, step) -> str:
                 f"[{best_info[2]}] sim_change={best_score:.4f}")
 
     if all_clicks:
-        return (f"右键菜单：遍历 {len(all_clicks)} 候选点击（含VLM/locate），最佳变化={best_score:.4f}"
-                f" at ({best_info[0]},{best_info[1]}) [{best_info[2]}]")
+        return (f"右键菜单：遍历 {len(all_clicks)} 候选点击（含VLM/fusion），最佳变化={best_score:.4f} "
+                f"at ({best_info[0]},{best_info[1]}) [{best_info[2]}]")
 
     return "右键菜单：所有策略均失败"
-
-
 def workflow_date_picker(executor, step) -> str:
     """日期选择器工作流：分步选择年→月→日。
 

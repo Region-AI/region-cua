@@ -74,6 +74,9 @@ class OperationLogger:
     def info(self, message: str) -> None:
         self._write(f"[{self._ts()}]   · {message}")
 
+    def error(self, message: str) -> None:
+        self._write(f"[{self._ts()}]   ✗ {message}")
+
     def step_end(self, record: Any) -> None:
         order = getattr(record, "order", "?")
         ok = getattr(record, "success", False)
