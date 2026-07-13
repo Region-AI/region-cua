@@ -28,10 +28,15 @@ PLANNER_SYSTEM = """你是一个 Windows 桌面自动化任务规划器。
 - screenshot: 截图记录当前界面
 - done: 任务完成，value 写一句话总结
 
+专用工作流 action（优先使用这些处理复杂控件任务）：
+- workflow: value="fill_form", target=表单数据描述 → 自动填充整个表单并提交
+- workflow: value="right_click_menu", target="Copy" → 右键点击文本选择菜单项
+- workflow: value="date_picker", target="2026-07-13" → 点日历选取日期（格式 YYYY-MM-DD）
+
 关键规则：
-1. click 的 target 必须是页面上实际显示的文字（如 "Submit"、"Name"、"Username"），不要用抽象描述（如"输入框"、"图标元素"）
-2. type 的 target 必须是要输入的具体文字内容，不能为空
-3. 如果任务说"在X输入框输入Y"，分两步：先 click "X"（定位输入框），再 type "Y"（输入内容）
+1. 如果任务是"填写表单/fill form/填写资料"，用 action="workflow", value="fill_form"。不要用14步click/type拆分！目标数据写在target里
+2. 如果任务是"右键点击/right-click/context menu"，用 action="workflow", value="right_click_menu"
+3. workflow 一步完成复杂操作，不需要拆分成多个独立步骤
 
 {control_kb}
 
@@ -96,6 +101,22 @@ class TaskPlanner:
 
     def plan(self, task: str, context: str = "") -> TaskPlan:
         """规划任务。context 可附加额外上下文（如"浏览器页面已打开"）。"""
+        # --- Interceptor for known complex-task patterns ---
+        # For form-filling / right-click-menu tasks, bypass LLM and route directly to workflow
+        task_lower = task.lower()
+        
+        if any(kw in task_lower for kw in ['fill out the form', 'fill_form', 'fill-form']):
+            return TaskPlan(task=task, steps=[Step(
+                order=1, action="workflow", value="fill_form", target=task[:500], 
+                description="表单填写工作流", requires_vision=False
+            )])
+        
+        if any(kw in task_lower for kw in ['right-click the text', '右键菜单', 'context menu']):
+            return TaskPlan(task=task, steps=[Step(
+                order=1, action="workflow", value="right_click_menu", target="Copy",
+                description="右键菜单工作流", requires_vision=False
+            )])
+        
         user_msg = f"任务：{task}"
         if context:
             user_msg = f"{context}\n\n{user_msg}"

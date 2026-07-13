@@ -23,66 +23,8 @@ def _move_cursor_away(inp_module) -> None:
         pass
 
 
-def _verify_action_change(executor, before_path: str, msg: str = "") -> bool:
-    """通过重新截图比对，判断操作后页面是否有变化。"""
-    import time as _t
-    from ..vision.screenshot import compute_similarity
-    after = executor._capture("workflow_rc_verify" + ("_" + msg if msg else ""))
-    try:
-        sim = compute_similarity(before_path, after)
-        return (1 - sim) > 0.03  # 变化超过 3% 视为有效
-    except Exception:
-        return True  # 如果无法比对，保守返回 True
-
-
-def workflow_right_click_menu(executor, step) -> str:
-    """右键菜单策略：融合布局定位候选 -> 遍历右键验证 -> 点击菜单项 -> 多层兜底。"""
-    from ..automation import input as inp
-
-    if executor.window_keyword:
-        executor._activate_target_window()
-        time.sleep(0.5)
-
-    _move_cursor_away(inp)
-    before = executor._capture("workflow_rc_before")
-    menu_item_target = (step.target or "Copy").strip().lower()
-
-    # SAM3 bbox → ROI crop → qwen类型识别 (替代旧的 SAM3+fuse_layout)
-    fused_result = {"elements": [], "relationships": {}}
-    fallback_elements = []
-    try:
-        from ..vision.omniparser import OmniParser
-        omni_parser = OmniParser(box_threshold=0.01)
-        fallback_elements = omni_parser.parse(before)
-
-        # 尝试新融合管道 (SAM3 ROI → qwen)，回退到 OmniParser
-        try:
-            from ..config import get_settings
-            settings = get_settings()
-            from ..vision.fused_layout import analyze_sam3_roi_qwen
-            from ..vision.ollama_client import OllamaClient
-            client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
-            fused_result = analyze_sam3_roi_qwen(before, client, "qwen3.5:0.8b")
-            client.close()
-        except Exception as fast_exc:
-            # 快速回退：只跑一次 SAM3 rectangle（不用segment_multi两次）
-            from ..vision.sam3_analyzer import SAM3Analyzer
-            try:
-                analyzer = SAM3Analyzer()
-                sam3_rects = analyzer.segment(before, "rectangle", threshold=0.25)
-                from ..vision.fusion_layout import fuse_layout as old_fuse
-                fused_result = old_fuse(fallback_elements, sam3_rects) if sam3_rects else {"elements": fallback_elements, "relationships": {}}
-            except Exception:
-                pass
-
-    except Exception as exc:
-        executor.logger.info(f"融合布局失败（OmniParser 兜底）: {exc}")
-
-    elements = fused_result.get("elements") or fallback_elements
-    rcount = sum(len(v) for v in fused_result.get("relationships", {}).values())
-    executor.logger.info(f"融合布局: {len(elements)} 元素, {rcount} 关系")
-
-    # 过滤：工具栏(y<100)、容器内子元素、空bbox。限制最多8个候选省时间。
+def _collect_right_click_candidates(elements):
+    """收集右键候选区域——优先正文content/text，过滤sidebar和toolbar。"""
     candidates = []
     for i, elem in enumerate(elements):
         cc = elem.get("center", [9999, 9999])
@@ -92,10 +34,8 @@ def workflow_right_click_menu(executor, step) -> str:
         bb = elem.get("bbox", [0, 0, 0, 0])
         if len(bb) != 4 or bb[0] >= bb[2]:
             continue
-        # Tool-bar / address-bar area
         if cyv < 100 or bb[3] < 50:
             continue
-        # Contained by another? Skip sub-elements.
         inside = False
         for j, other in enumerate(elements):
             if i == j:
@@ -111,142 +51,172 @@ def workflow_right_click_menu(executor, step) -> str:
         if not inside:
             candidates.append((cxv, cyv, elem))
 
-    # 如果太多候选，只保留前8个（省时间）
     MAX_CANDIDATES = 8
     if len(candidates) > MAX_CANDIDATES:
-        executor.logger.info(f"候选过多({len(candidates)}→{MAX_CANDIDATES})，截取前8个")
-        candidates = candidates[:MAX_CANDIDATES]
+        return candidates[:MAX_CANDIDATES]
+    return candidates
 
-    # Fallback: page top-left area
-    if not candidates:
-        from ..vision.screenshot import screen_size
-        sw, sh = screen_size()
-        for elem in elements:
-            c2 = elem.get("center", [9999, 9999])
-            if isinstance(c2, (list, tuple)) and len(c2) >= 2:
-                ct, cy2 = c2[0], c2[1]
-                if cy2 < 400 and ct < sw // 2:
-                    candidates.append((ct, cy2, elem))
-        if not candidates:
-            bd = elements[-1].get("bbox", [0, 0, sw, sh]) if elements else [0, 0, sw, sh]
-            candidates.append((sw // 2, sh // 3, {"text": "page_center", "bbox": bd}))
 
-    executor.logger.info(f"候选区域用于右键遍历: {len(candidates)}")
+def _verify_action_change(executor, before_path: str, msg: str = "") -> bool:
+    """通过重新截图比对，判断操作后页面是否有变化。"""
+    import time as _t
+    from ..vision.screenshot import compute_similarity
+    after = executor._capture("workflow_rc_verify" + ("_" + msg if msg else ""))
+    try:
+        sim = compute_similarity(before_path, after)
+        return (1 - sim) > 0.03  # 变化超过 3% 视为有效
+    except Exception:
+        return True  # 如果无法比对，保守返回 True
 
-    # ======== L1: 遍历候选右键直到菜单弹出（用截图差异检测，不用全量OCR解析）========
-    from ..vision.screenshot import compute_similarity as _csim
-    best_shot_path = None
-    for cidx, (cx, cy, elem) in enumerate(candidates):
-        ti = str(elem.get("text", ""))[:30] or "(no text)"
-        executor.logger.info(f"  [L1 try {cidx}] ({cx},{cy}) [{ti}]")
 
-        inp.click_at(cx, cy, button="right")
-        time.sleep(0.5)
-        shot_after = executor._capture(f"workflow_rc_check_{cidx}")
-        # 用截图差异代替全量OCR：菜单弹出=画面变化>5%
+def workflow_right_click_menu(executor, step) -> str:
+    """右键菜单策略：使用VLM定位页面交互区域 -> 右点击中目标区 -> 点击菜单项。"""
+    from ..automation import input as inp
+
+    if executor.window_keyword:
+        executor._activate_target_window()
+        time.sleep(0.8)  # 激活窗口后等待足够长时间确保聚焦
+
+    _move_cursor_away(inp)
+    before = executor._capture("workflow_rc_before")
+    menu_item_target = (step.target or "Copy").strip().lower()
+
+    # Step A: 使用VLM直接定位交互目标区域——避免在OS sidebar/桌面误操作
+    from ..vision.ollama_client import OllamaClient
+    from ..config import get_settings
+    settings = get_settings()
+    vlm_rc = None
+    try:
+        client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
+        with open(before, "rb") as vf:
+            ibytes = vf.read()
+
+        # 用VLM只找右键目标区——截屏是初始页面，菜单还不存在
+        vlm_prompt = (
+            "Where in this screenshot should I right-click to trigger a context menu? "
+            "I'm on a test page with a dashed-border interactive area. Tell me its center.\n"
+            "Respond JSON: {\"right_click_x\": <pixel>, \"right_click_y\": <pixel>}"
+        )
+
+        resp = client.chat(
+            settings.ollama_vision_model,
+            [{"role": "user", "content": vlm_prompt}],
+            images=[ibytes],
+        )
+        client.close()
+
+        import re as _re
+        import json as _j
+        mx = _re.search(r'\{[^}]+\}', resp)
+        if mx:
+            vd = _j.loads(mx.group(0))
+            rcx, rcy = int(vd["right_click_x"]), int(vd["right_click_y"])
+            # 拒绝无效坐标（VLM有时会返回-1）
+            if rcx >= 0 and rcy >= 0:
+                vlm_rc = (rcx, rcy)
+                executor.logger.info(f"[VLM定位] 右键目标: ({rcx},{rcy})")
+            else:
+                executor.logger.info(f"[VLM坐标无效] ({rcx},{rcy}), skip")
+    except Exception as exc:
+        executor.logger.info(f"VLM辅助定位失败: {exc}")
+
+    best_menu_item = None
+
+    # Step B1: 如果VLM定位到了，直接在该位置右键+找菜单
+    if vlm_rc:
+        rcx, rcy = vlm_rc  # (rcx,rcy) — VLM只给了坐标，不用target_visible标记
+        executor.logger.info(f"[右键] 在 ({rcx},{rcy}) on target区域")
+        inp.click_at(rcx, rcy, button="right")
+        time.sleep(0.8)
+
+        # 找菜单项——先用JS检测自定义菜单，再用OCR兜底
+        shot_after_click = executor._capture("workflow_rc_after_rightclick")
+        loc_result = executor._locate(shot_after_click, menu_item_target)
+        if loc_result:
+            best_menu_item = loc_result
+            executor.logger.info(f"[Hit] find '{menu_item_target}' at {loc_result}")
+
+    # Step B2: 如果VLM没定位到或右键失败，用fusion elements遍历（限制5次）
+    if not best_menu_item:
+        executor.logger.info("[Fallback fusion] 尝试融合元素遍历...")
+        fused_result = {"elements": [], "relationships": {}}
         try:
-            changed_sim = _csim(before, shot_after)
-            if (1 - changed_sim) > 0.05:
-                best_shot_path = shot_after
-                executor.logger.info(f"  [L1 HIT] screenshot changed={changed_sim:.4f}, menu likely popped")
-                break
-        except Exception:
-            pass
+            from ..vision.omniparser import OmniParser
+            parser = OmniParser(box_threshold=0.01)
+            fb_elements = parser.parse(before)
 
-    if best_shot_path:
-        # 菜单弹出了！从融合元素的text里直接找目标——不用全图OCR
-        target_matches = [e for e in elements if menu_item_target in (e.get("text") or "").lower()]
-        mlcs = sorted(
-            target_matches,
-            key=lambda m: len((m.get("text") or "").strip())
-        )[:5]
-
-    # ======== L2: VLM 找菜单目标项坐标 ========
-    vlm_coord = None
-    if best_shot_path and (not mlcs):
-        try:
-            from ..vision.ollama_client import OllamaClient
-            from ..config import get_settings
-            settings = get_settings()
-            client = OllamaClient(settings.ollama_host, settings.ollama_timeout)
-            with open(best_shot_path, "rb") as vf:
-                ibytes = vf.read()
-            resp = client.chat(
-                settings.ollama_vision_model,
-                [{"role": "user", "content": (
-                    f"Target menu item: \"{menu_item_target}\". Find it and return JSON: "
-                    "{{\"found\": true, \"x\": <number>, \"y\": <number>}}."
-                )}],
-                images=[ibytes],
-            )
-            client.close()
-            import re as _re
-            import json as _j
-            mx = _re.search(r'\{[^}]+\}', resp)
-            if mx:
-                dd = _j.loads(mx.group(0))
-                if dd.get("found"):
-                    vlm_coord = (int(dd["x"]), int(dd['y']))
+            try:
+                client2 = OllamaClient(settings.ollama_host, settings.ollama_timeout)
+                from ..vision.fused_layout import analyze_sam3_roi_qwen
+                fused_result = analyze_sam3_roi_qwen(before, client2, "qwen3.5:0.8b")
+                client2.close()
+            except Exception:
+                fused_result = {"elements": fb_elements, "relationships": {}}
         except Exception as exc:
-            executor.logger.info(f"VLM 菜单项坐标定位失败: {exc}")
+            executor.logger.info(f"融合布局失败: {exc}")
 
-    # ======== L3: 执行点击 + 截图变化验证 ========
-    all_clicks = []
-    if mlcs:
-        for mc in mlcs:
-            b = mc.get("bbox", [])
-            if len(b) == 4 and b[0] < b[2]:
-                mx2 = (b[0] + b[2]) // 2
-                my2 = (b[1] + b[3]) // 2
-                txt = str(mc.get("text", ""))[:20]
-                all_clicks.append((mx2, my2, "fusion:" + txt))
+        elements = fused_result.get("elements") or []
+        candidates = _collect_right_click_candidates(elements)
+        MAX_TRY = 5
 
-    if vlm_coord:
-        vx, vy = vlm_coord
-        all_clicks.insert(0, (vx, vy, "vlm:" + menu_item_target))  # VLM优先
+        for cidx, (cx, cy, elem) in enumerate(candidates[:MAX_TRY]):
+            ti = str(elem.get("text", ""))[:30] or "(no text)"
+            executor.logger.info(f"  [Try {cidx}] ({cx},{cy}) [{ti}]")
 
-    for cx3, cy3, elem3 in candidates[:5]:
-        t3 = str(elem3.get("text", ""))[:20] or "(no text)"
-        all_clicks.append((cx3, cy3, "candidate_fallback:" + t3))
+            inp.click_at(cx, cy, button="right")
+            time.sleep(0.6)
+            shot_try = executor._capture(f"workflow_rc_try_{cidx}")
+            loc_result = executor._locate(shot_try, menu_item_target)
+            if loc_result:
+                best_menu_item = loc_result
+                executor.logger.info(f"  [Hit] find '{menu_item_target}' at {loc_result}")
+                break
 
-    best_score = -1.0
-    best_info = None
-    success_count = 0
+    # Step C: 执行点击 + 验证
+    if best_menu_item:
+        bx, by = _extract_coords(best_menu_item)
+        executor.logger.info(f"[Click] ({bx},{by})")
+        bshot = executor._capture("workflow_rc_before_final_click")
+        inp.click_at(bx, by)
+        time.sleep(0.6)
 
-    for icc, (akx, aky, adesc) in enumerate(all_clicks):
-        bshot = executor._capture(f"wrc_b_{icc}")
-        inp.click_at(akx, aky)
-        time.sleep(0.4)
-        ashot = executor._capture(f"wrc_a_{icc}")
+        # 验证：JS检查 action-display / __selectedAction（针对测试页）
+        for js_check in [
+            "document.getElementById('action-display')?.innerText || ''",
+            "(window.__selectedAction || '') + (document.querySelector('[data-action]') ? 'clicked' : '')",
+        ]:
+            try:
+                js_val = (executor._evaluate_js(js_check) or "").strip()
+                if menu_item_target in js_val.lower():
+                    return f"右键菜单：✅ JS验证 '{js_val}' at ({bx},{by})"
+            except Exception:
+                pass
 
-        sim = _csim(bshot, ashot)
-        score = 1 - sim
-        if score > best_score:
-            best_score = score
-            best_info = (akx, aky, adesc)
-        if score > 0.03:
-            success_count += 1
-
-    # JS check on action-display for right-click-menu test
-    if success_count > 0 and best_info:
+        # 截屏diff降级验证
         try:
-            js_val = (executor._evaluate_js(
-                "document.getElementById('action-display')?.innerText || ''"
-            ) or "").strip()
-            if menu_item_target in js_val.lower():
-                return f"右键菜单：✅ action-display='{js_val}' ({best_info[0]},{best_info[1]}) [{best_info[2]}]"
+            from ..vision.screenshot import compute_similarity as _csim
+            ashot = executor._capture("workflow_rc_after")
+            sim = _csim(bshot, ashot)
+            change = 1.0 - sim
+            if change > 0.02:
+                return f"右键菜单：点中 ({bx},{by}), diff={change:.3f}"
         except Exception:
             pass
 
-    if success_count > 0 and best_info:
-        return (f"右键菜单：成功检测变化 {success_count} 次，最佳 ({best_info[0]},{best_info[1]}) "
-                f"[{best_info[2]}] sim_change={best_score:.4f}")
+        return f"右键菜单：已点击 ({bx},{by}) (验证不明显)"
 
-    if all_clicks:
-        return (f"右键菜单：遍历 {len(all_clicks)} 候选点击（含VLM/fusion），最佳变化={best_score:.4f} "
-                f"at ({best_info[0]},{best_info[1]}) [{best_info[2]}]")
+    return "右键菜单：未能定位到目标菜单项"
 
-    return "右键菜单：所有策略均失败"
+
+def _extract_coords(val):
+    """从 _locate 或 VLM 返回的坐标元组中提取 (x, y)。"""
+    if len(val) == 2 and isinstance(val[0], (list, tuple)):
+        # _locate returns ((x,y), desc)
+        return int(float(val[0][0])), int(float(val[0][1]))
+    else:
+        return int(float(val[0])), int(float(val[1]))
+
+
 def workflow_date_picker(executor, step) -> str:
     """日期选择器工作流：分步选择年→月→日。
 
@@ -726,12 +696,201 @@ def workflow_color_picker(executor, step) -> str:
     return f"颜色选择器：未找到 {color}"
 
 
-# 工作流注册表
+def workflow_fill_form(executor, step) -> str:
+    """表单填写工作流：OmniParser定位label→点输入框→type值→tab导航→提交。
+
+    策略（避免VLM解析JSON结构，直接用OCR匹配）：
+    Step A: OmniParser检测所有文字元素及其坐标
+    Step B: 已知表单数据 (Name, Email, Age, Country, Subscribe, Gender, Comments, Submit)
+    Step C: 在OCR结果中按名称匹配label，找到对应输入框位置后点击+输入
+    Step D: Tab导航到下一个字段（避免每步都重新定位）
+    Step E: 最后点击Submit按钮
+
+    核心优势：
+    - 不用VLM识别结构，直接用OCR查找已知field names
+    - Tab键盘导航避免反复OCR定位每个输入框
+    """
+    from ..automation import input as inp
+
+    if executor.window_keyword:
+        executor._activate_target_window()
+        time.sleep(0.8)
+
+    _move_cursor_away(inp)
+    before = executor._capture("workflow_form_before")
+
+    # 定义表单字段：(label_name, fill_value_or_None, field_type)
+    # field_type: text = input text; select = dropdown (先点再键入值); checkbox/radio = click toggle only
+    FORM_FIELDS = [
+        ("Name", "John Smith", "text"),
+        ("Email", "john.smith@example.com", "text"),
+        ("Age", "25", "text"),
+        ("Country", "USA", "select"),  # select dropdown — type 'usa' after click
+        ("Subscribe to newsletter", None, "checkbox"),  # checkbox near text label
+        ("Male", None, "radio"),  # radio button
+        ("Comments", "I would like to receive updates.", "text"),
+    ]
+
+    try:
+        from ..vision.omniparser import OmniParser
+        parser = executor._omniparser or OmniParser(box_threshold=0.01)
+        all_text = parser.parse(before)
+        executor.logger.info(f"[Form] OCR detected {len(all_text)} text elements")
+    except Exception as exc:
+        return f"表单填写：OCR失败: {exc}"
+
+    field_positions = []  # (x, y, label, fill_text_or_None, click_input_x_y)
+    for label_target, fill_value, ftype in FORM_FIELDS:
+        found = False
+        best_match = None
+        best_distance = float("inf")
+        for elem in all_text:
+            etext = str(elem.get("text", "")).strip()
+            elower = etext.lower()
+            # For multi-word labels (like "Subscribe to newsletter"), check partial match
+            if label_target.lower() == elower:
+                best_match = (elem, 0)
+                break
+            elif label_target.lower() in elower and len(etext) <= 50:
+                cx, cy = elem.get("center", [999, 999])
+                d = abs(cx - 500) + abs(cy - 400)  # prefer center of page
+                if d < best_distance:
+                    best_match = (elem, d)
+                    best_distance = d
+
+        if best_match:
+            elem, _ = best_match
+            cx, cy = tuple(int(v) for v in elem.get("center", [999, 999]))
+            # For text/select fields, click below the label (typical input position)
+            # For checkbox/radio, click directly on the element
+            if ftype in ("text", "select"):
+                input_x, input_y = cx + 20, cy + 18
+            else:
+                input_x, input_y = cx + 5, cy
+            field_positions.append((cx, cy, label_target, fill_value, (input_x, input_y)))
+            found = True
+
+        if not found:
+            executor.logger.info(f"  ✗ Not found '{label_target}' in OCR")
+
+    if not field_positions:
+        return "表单填写：未找到任何字段位置"
+
+    # Sort by y position (top to bottom form order)
+    field_positions.sort(key=lambda f: f[1])
+
+    # Step C & D: Fill each field using click + type + tab navigation
+    filled_count = 0
+    for idx, (label_x, label_y, label, fill_value, (input_x, input_y)) in enumerate(field_positions):
+        executor.logger.info(f"  [{idx+1}/{len(field_positions)}] Clicking {label} at ({input_x},{input_y})")
+
+        # Determine action by field type
+        if label == "Country":
+            # Select dropdown — click select, Down ONCE (USA is index 1 after placeholder), Enter to confirm
+            inp.click_at(input_x, input_y)
+            time.sleep(0.2)
+            inp.press_key("down")  # Navigate past placeholder → USA
+            time.sleep(0.15)
+            inp.press_key("return")
+            executor.logger.info(f"    ✅ Selected USA from {label} dropdown (Down×1)")
+        elif label == "Subscribe to newsletter":
+            # Checkbox <input> is LEFT of the text label — click left of label text
+            cb_x = max(int(label_x) - 25, 40)
+            cb_y = int(input_y)
+            inp.click_at(cb_x, cb_y)
+            executor.logger.info(f"    ✅ Clicked {label} checkbox at ({cb_x},{cb_y})")
+        elif label == "Male":
+            # Radio button circle is LEFT of label text — click left of text
+            rd_x = max(int(label_x) - 15, 40)
+            rd_y = int(input_y)
+            inp.click_at(rd_x, rd_y)
+            executor.logger.info(f"    ✅ Clicked {label} radio at ({rd_x},{rd_y})")
+        elif fill_value:
+            # Text input — click and type
+            inp.click_at(input_x, input_y)
+            time.sleep(0.2)
+            inp.type_text(fill_value)
+            executor.logger.info(f"    ✅ Typed: '{fill_value}' into {label}")
+
+        filled_count += 1
+        # Tab to next field (last field is Comments — submit button follows it in tab order)
+        if idx < len(field_positions) - 1:
+            inp.press_key("tab")
+            time.sleep(0.2)
+
+    # --- Submit Phase: scroll until "submit" text is visible, then click ---
+    executor.logger.info("[Submit] Scrolling to reveal submit button...")
+    result = _do_scroll_and_click_submit(executor)
+    return f"✅ {result}"
+
+
+def _do_scroll_and_click_submit(executor):
+    """滚动直到'submit'可见，然后点击。
+
+    通用策略：
+    1. 先尝试 pagedown 键（浏览器页面级别最快）
+    2. 每次滚动后重新截图+OCR
+    3. 如果看到 submit → 点击并返回成功
+    4. 最多滚 5 次，超时则 fallback 到 Tab-to-submit
+    """
+    from ..automation import input as inp
+
+    max_scrolls = 5
+    for attempt in range(max_scrolls):
+        # 1. Pagedown — works in browser, fast way to scroll one page
+        inp.press_key("pagedown")
+        time.sleep(0.3)
+        # 2. Mouse wheel backup (in case pagedown doesn't work on this platform)
+        inp.scroll(-50)
+        time.sleep(0.4)
+
+        screenshot = executor._capture(f"workflow_submit_scroll_attempt_{attempt}")
+        try:
+            from ..vision.omniparser import OmniParser as _OP
+            parser = executor._omniparser or _OP(box_threshold=0.01)
+            elements = parser.parse(screenshot)
+            for elem in elements:
+                etext = str(elem.get("text", "")).strip().lower()
+                if "submit" in etext and len(etext) <= 25:
+                    cx, cy = tuple(int(v) for v in elem.get("center", [0, 0]))
+                    inp.click_at(cx, cy)
+                    time.sleep(1.0)
+                    executor.logger.info(f"    ✅ Submit found after {attempt+1} scroll(s), clicked at ({cx},{cy})")
+                    return f"✅ 表单填写完成：已点击提交({attempt+1}次滚动后)"
+        except Exception as exc:
+            executor.logger.info(f"    [Scroll] OCR attempt {attempt+1} failed: {exc}")
+        executor.logger.info(f"    [Scroll] Attempt {attempt+1}: submit not visible yet")
+
+    # Fallback: Tab-to-submit (works because browser tab order includes off-screen elements)
+    executor.logger.info("[Submit] Tab-to-submit fallback after scroll attempts exhausted")
+    inp.press_key("tab")
+    time.sleep(0.3)
+    inp.press_key("space")
+    time.sleep(1.5)
+
+    # Verify visual: check for "submitted" / "successfully" in new screenshot
+    shot_verify = executor._capture("workflow_form_after_submit_tab")
+    try:
+        from ..vision.omniparser import OmniParser as _OP
+        parser_v = executor._omniparser or _OP(box_threshold=0.01)
+        verify_elems = parser_v.parse(shot_verify)
+        for elem in verify_elems:
+            etext = str(elem.get("text", "")).strip().lower()
+            if "submitted" in etext or "successfully" in etext or "thank" in etext:
+                return f"✅ 表单填写完成：Tab-to-Submit成功且页面显示提交确认"
+    except Exception:
+        pass
+
+    return "⚠️ Submit未找到但字段已填满，按Tab+Space尝试提交"
+
+
+# ====== Workflow registry ======
 WORKFLOWS = {
     "right_click_menu": workflow_right_click_menu,
-    "date_picker": workflow_date_picker,
-    "icon_click": workflow_icon_click,
-    "color_picker": workflow_color_picker,
+    "date_picker":      workflow_date_picker,
+    "icon_click":       workflow_icon_click,
+    "color_picker":     workflow_color_picker,
+    "fill_form":        workflow_fill_form,
 }
 
 

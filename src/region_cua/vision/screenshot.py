@@ -84,6 +84,27 @@ def screen_size() -> tuple[int, int]:
     return pyautogui.size()
 
 
+def compute_similarity(path_a: str | Path, path_b: str | Path) -> float:
+    """计算两张截图的相似度（MSE-based），返回 [0.0, 1.0] 之间的值。
+
+    1.0 = 完全相同, ~0.95 = 很相似, <0.90 = 有明显差异。
+    用于检测 UI 变化：右键菜单弹出、选项卡切换等场景。
+    """
+    from PIL import Image as _Img, ImageChops as _Ic
+    import numpy as __np
+    a = __np.array(_Img.open(str(path_a)).convert("RGB"))
+    b = __np.array(_Img.open(str(path_b)).convert("RGB"))
+    if a.shape != b.shape:
+        # 尺寸不同，resize较小的到较大再比
+        s = max(a.shape[0], b.shape[0]), max(a.shape[1], b.shape[1])
+        from PIL import Image as _I2
+        a = __np.array(_I2.Image.fromarray(a).resize(s[::-1]).convert("RGB"))
+        b = __np.array(_I2.Image.fromarray(b).resize(s[::-1]).convert("RGB"))
+    mse = __np.mean((a.astype(__np.int32) - b.astype(__np.int32)) ** 2)
+    # MSE: 0=相同, 255*255=最大差异 → 相似度映射到 [0, 1]
+    return max(0.0, float(1.0 - mse / (255 * 255 + 1e-6)))
+
+
 def save_screenshot(img, path: str | Path) -> str:
     """把 PIL 图片保存为 PNG，返回字符串路径。"""
     p = Path(path)

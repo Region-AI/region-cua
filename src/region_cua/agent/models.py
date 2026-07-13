@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 # 合法的 action 集合
 VALID_ACTIONS = {
     "open_app", "click", "type", "hotkey", "scroll", "wait", "screenshot", "done",
+    "workflow",  # 复杂控件工作流: fill_form, date_picker, right_click_menu等
 }
 
 

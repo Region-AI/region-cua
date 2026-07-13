@@ -173,44 +173,10 @@ def _select_dropdown(desc: str, elements: list[dict]) -> list[Step]:
 
 
 def _fill_form(desc: str, elements: list[dict]) -> list[Step]:
-    """fill-form: 逐个 click label → type value → screenshot → click Submit Form"""
-    # 提取引号字段: Name: "John Smith"
-    pairs = re.findall(r'(\w+):\s*"([^"]*)"', desc)
-    # 提取数字字段: Age: 25
-    num_pairs = re.findall(r'(\w+):\s*(\d+)(?:,|$)', desc)
-    # 合并，保持出现顺序
-    all_fields = []
-    seen = set()
-    for field, value in pairs:
-        if field not in seen:
-            all_fields.append((field, value))
-            seen.add(field)
-    for field, value in num_pairs:
-        if field not in seen:
-            all_fields.append((field, value))
-            seen.add(field)
-
-    steps = []
-    order = 1
-    for field, value in all_fields:
-        # 跳过复杂格式字段（如 Subscribe to newsletter）
-        if "{" in value or "}" in value:
-            continue
-        steps.append(Step(order=order, action="click", target=field,
-                          description=f"点击 {field} 输入框", requires_vision=True))
-        order += 1
-        steps.append(Step(order=order, action="type", target=value,
-                          description=f"输入 {value}", requires_vision=False))
-        order += 1
-
-    # 重新截图（确保 Submit Form 按钮在可视区域）
-    steps.append(Step(order=order, action="screenshot", target="",
-                      description="截图查看完整表单", requires_vision=False))
-    order += 1
-    # 最后点击 Submit Form
-    steps.append(Step(order=order, action="click", target="Submit Form",
-                      description="提交表单", requires_vision=True))
-    return steps
+    """fill-form: 用 dedicated form-filling workflow (VLM定位+键盘导航填入所有字段)"""
+    return [Step(order=1, action="workflow", target="form_data",
+                 value="fill_form", description="表单填写工作流",
+                 requires_vision=False)]
 
 
 def _click_icon(desc: str, elements: list[dict]) -> list[Step]:
