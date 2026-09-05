@@ -6,6 +6,8 @@
   <script>
     window.__submitted = false;
 
+    // 目标按钮文字：bench 运行时由 Python 侧替换 {{BUTTON_TEXT}}；
+    // 直接 file:// 打开时（不经替换）用默认值 Submit 兜底，保证页面可独立渲染。
     const targetText = '{{BUTTON_TEXT}}';
 
     // All possible button texts (distractors)

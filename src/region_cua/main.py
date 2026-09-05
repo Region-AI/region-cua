@@ -387,6 +387,7 @@ def bench(
     all_tasks: bool = typer.Option(False, "--all", help="运行全部任务"),
     output: str = typer.Option(None, "--output", help="结果输出 JSON 路径"),
     backend: str = typer.Option("background", "--backend", help="截图后端：background（PrintWindow截窗口）或 foreground（截全屏）"),
+    cua_backend: str = typer.Option("", "--cua-backend", help="CUA 后端：trycua / qwen-ui（留空走默认路径）"),
 ):
     """运行 cua-bench 基准测试，评估 region-cua 的桌面操作能力。"""
     from .bench.run_bench import bench_command
@@ -398,6 +399,7 @@ def bench(
         all_tasks=all_tasks,
         output=output,
         backend=backend,
+        cua_backend=cua_backend,
     )
 
 

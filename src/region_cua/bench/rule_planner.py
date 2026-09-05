@@ -153,23 +153,10 @@ def _video_player(desc: str, elements: list[dict]) -> list[Step]:
 
 
 def _select_dropdown(desc: str, elements: list[dict]) -> list[Step]:
-    # 从描述提取要选择的选项
-    quoted = _extract_quoted(desc)
-    option = quoted[0] if quoted else ""
-    # 用固定 target（bench HTML 固定，不依赖 OCR 噪声）
-    target = "Choose a fruit"
-    steps = [
-        Step(order=1, action="click", target=target,
-             description="展开下拉菜单", requires_vision=True),
-        Step(order=2, action="wait", target="0.5",
-             description="等下拉列表展开", requires_vision=False),
-        Step(order=3, action="screenshot", target="",
-             description="重新截图定位下拉选项", requires_vision=False),
-    ]
-    if option:
-        steps.append(Step(order=4, action="click", target=option,
-                          description=f"选择 {option}", requires_vision=True))
-    return steps
+    """select-dropdown: 用键盘导航工作流（native select options不可OCR）"""
+    return [Step(order=1, action="workflow", target="",
+                 value="select_dropdown", description=desc,
+                 requires_vision=True)]
 
 
 def _fill_form(desc: str, elements: list[dict]) -> list[Step]:

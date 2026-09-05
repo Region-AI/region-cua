@@ -6,3 +6,9 @@ __pycache__/
 dist/
 build/
 models/sam3/
+
+# 临时调试文件
+demo_helper.py
+dp_cdp*.py
+dp_controlled.py
+tmp_edge_profile/

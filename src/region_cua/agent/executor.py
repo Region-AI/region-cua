@@ -45,6 +45,7 @@ class TaskExecutor:
         backend: str = "foreground",
         window_keyword: Optional[str] = None,
         locate_method: str = "vlm",  # "vlm" 或 "omniparser"
+        cua_backend: Optional[object] = None,  # CuaBackend 实例（trycua/qwen-ui）
     ):
         self.client = client
         self.vision_model = vision_model
@@ -56,6 +57,7 @@ class TaskExecutor:
         self.backend = backend  # "foreground" 或 "background"
         self.window_keyword = window_keyword  # 后台模式截取的窗口关键词
         self.locate_method = locate_method  # "vlm" 或 "omniparser"
+        self.cua_backend = cua_backend  # trycua / qwen-ui CuaBackend 实例
         self._omniparser = None  # OmniParser 延迟加载
         self.step_records: list[StepRecord] = []
 
@@ -67,6 +69,55 @@ class TaskExecutor:
         self.logger = OperationLogger(log_path, enabled=record_log)
 
     # ------------------------------------------------------------- public
+    def click(self, x: int, y: int, button: str = "left", clicks: int = 1) -> None:
+        """统一点击：CUA backend 模式走 backend（scope:desktop，自带前台激活），否则 pyautogui。
+
+        workflow 层必须用这个而不是直接 inp.click_at，保证 CUA backend 模式坐标/窗口一致。
+        """
+        if self.cua_backend is not None:
+            try:
+                self.cua_backend.ensure_target(self.window_keyword)
+            except Exception:
+                pass
+            self.cua_backend.click(int(x), int(y), button=button, clicks=clicks)
+        else:
+            from ..automation import input as _inp
+            _inp.click_at(int(x), int(y), button=button, clicks=clicks)
+
+    def type(self, text: str) -> None:
+        """统一输入：CUA backend 模式走 backend（type_text_safe 规避 IME + foreground 重试）。"""
+        if self.cua_backend is not None:
+            try:
+                self.cua_backend.ensure_target(self.window_keyword)
+            except Exception:
+                pass
+            self.cua_backend.type_text(text)
+        else:
+            from ..automation import input as _inp
+            _inp.type_text(text)
+
+    def hotkey(self, *keys: str) -> None:
+        if self.cua_backend is not None:
+            try:
+                self.cua_backend.ensure_target(self.window_keyword)
+            except Exception:
+                pass
+            self.cua_backend.hotkey(*keys)
+        else:
+            from ..automation import input as _inp
+            _inp.press_hotkey(*keys)
+
+    def scroll(self, amount: int) -> None:
+        if self.cua_backend is not None:
+            try:
+                self.cua_backend.ensure_target(self.window_keyword)
+            except Exception:
+                pass
+            self.cua_backend.scroll(int(amount))
+        else:
+            from ..automation import input as _inp
+            _inp.scroll(int(amount))
+
     def execute(self, plan: TaskPlan) -> list[StepRecord]:
         from ..automation.awake import keep_awake
 
@@ -134,6 +185,11 @@ class TaskExecutor:
             timestamp=ts,
         )
         try:
+            # 窗口激活：在截图前先激活（确保拍到任务页面而非桌面壁纸）
+            if step.normalized_action() == "workflow" or (step.requires_vision and step.normalized_action() == "click"):
+                if self.window_keyword:
+                    self._activate_target_window()
+                    time.sleep(0.5)
             before = self._capture(f"step{order}_{ts}_before")
             record.screenshot_before = before
 
@@ -195,20 +251,37 @@ class TaskExecutor:
         elif action == "click":
             self._do_click(step)
         elif action == "type":
-            if self.backend == "background" and self.window_keyword:
+            if self.cua_backend is not None:
+                self.cua_backend.ensure_target(self.window_keyword)
+                self.cua_backend.type_text(step.target)
+            elif self.backend == "background" and self.window_keyword:
                 self._type_bg(step)
             else:
                 inp.type_text(step.target)
         elif action == "hotkey":
-            try:
-                inp.press_hotkey(step.target)
-            except Exception:
-                pass  # 非法组合键跳过
+            if self.cua_backend is not None:
+                try:
+                    self.cua_backend.ensure_target(self.window_keyword)
+                    self.cua_backend.hotkey(step.target)
+                except Exception:
+                    pass
+            else:
+                try:
+                    inp.press_hotkey(step.target)
+                except Exception:
+                    pass  # 非法组合键跳过
         elif action == "scroll":
-            try:
-                inp.scroll(int(step.target))
-            except (TypeError, ValueError):
-                inp.scroll(-3)
+            if self.cua_backend is not None:
+                try:
+                    self.cua_backend.ensure_target(self.window_keyword)
+                    self.cua_backend.scroll(int(step.target))
+                except (TypeError, ValueError):
+                    self.cua_backend.scroll(-3)
+            else:
+                try:
+                    inp.scroll(int(step.target))
+                except (TypeError, ValueError):
+                    inp.scroll(-3)
         elif action == "wait":
             inp.wait(step.target)
         elif action == "screenshot":
@@ -216,6 +289,10 @@ class TaskExecutor:
         elif action == "done":
             pass
         elif action == "workflow":
+            # Activate window before workflow (same as click requires_vision)
+            if self.window_keyword:
+                self._activate_target_window()
+                time.sleep(0.5)
             try:
                 import importlib as _im
                 wf_mod = _im.import_module("region_cua.bench.workflows")
@@ -259,7 +336,9 @@ class TaskExecutor:
             x, y = w // 2, h // 2
         else:
             # 后台模式：截图坐标是窗口相对坐标，需转换为屏幕绝对坐标
-            if self.backend == "background" and self.window_keyword:
+            # （CUA backend 例外：backend 截图即窗口截图，cua-driver click 期望窗口内坐标，
+            #  故不加偏移；只有非 CUA 的 background 模式才加偏移给前台输入）
+            if self.backend == "background" and self.window_keyword and self.cua_backend is None:
                 offset = self._get_window_offset()
                 if offset:
                     x += offset[0]
@@ -290,7 +369,12 @@ class TaskExecutor:
             except Exception:
                 pass
 
-        inp.click_at(int(x), int(y), button=button, clicks=clicks)
+        # CUA backend 模式：坐标已是窗口内坐标（截图即窗口截图），直接走 backend 点击
+        if self.cua_backend is not None:
+            self.cua_backend.ensure_target(self.window_keyword)
+            self.cua_backend.click(int(x), int(y), button=button, clicks=clicks)
+        else:
+            inp.click_at(int(x), int(y), button=button, clicks=clicks)
 
     def _get_window_offset(self) -> Optional[tuple[int, int]]:
         """获取目标窗口在屏幕上的左上角偏移（用于后台坐标转换）。"""
@@ -321,8 +405,18 @@ class TaskExecutor:
             return None
 
     def _activate_target_window(self) -> None:
-        """激活目标窗口到前台（确保截图能看到页面内容）。"""
+        """激活目标窗口到前台（确保截图能看到页面内容）。
+
+        Windows 不允许后台进程直接抢前台，需要用 Alt 键技巧绕过限制。
+        CUA backend 模式用 cua-driver bring_to_front（AttachThreadInput，更可靠）。
+        """
         if not self.window_keyword:
+            return
+        if self.cua_backend is not None:
+            try:
+                self.cua_backend.activate_window(self.window_keyword)
+            except Exception:
+                pass
             return
         try:
             import ctypes
@@ -330,23 +424,40 @@ class TaskExecutor:
             hwnd = None
 
             @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
-            def _enum(h, _l):
+            def _enum(h, lctx):
                 nonlocal hwnd
+                if hwnd is not None:
+                    return True
                 length = user32.GetWindowTextLengthW(h)
-                if length > 0:
-                    buf = ctypes.create_unicode_buffer(length + 1)
-                    user32.GetWindowTextW(h, buf, length + 1)
-                    if self.window_keyword.lower() in buf.value.lower():
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(h, buf, length + 1)
+                title_lower = buf.value.lower()
+                # Exact substring match (e.g. keyword="Select Dropdown Task" matches window title)
+                if self.window_keyword.lower() in title_lower:
+                    hwnd = h
+                    return False
+                # Broader fallback: any CuaBrowser / WebView2 class, short task-like title
+                wc = ctypes.create_unicode_buffer(512)
+                user32.GetClassNameW(h, wc, 512)
+                if "CuaBrowser" in wc.value or "WebView2" in wc.value:
+                    # Exclude standard apps/Edge tabs/explorer windows
+                    excluded = ("microsoft edge", "explorer", "程序管理器", "chrome")
+                    if len(buf.value) < 60 and not any(e in title_lower for e in excluded):
                         hwnd = h
                         return False
                 return True
 
             user32.EnumWindows(_enum, 0)
             if hwnd:
-                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                # Alt key trick to bypass Windows foreground restrictions
+                user32.keybd_event(0x12, 0, 0, 0)       # Alt down
+                user32.keybd_event(0x12, 0, 0x0002, 0)  # Alt up
                 import time as _t
-                _t.sleep(0.2)
-                user32.SetForegroundWindow(hwnd)
+                _t.sleep(0.1)
+                try:
+                    user32.SetForegroundWindow(hwnd)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -354,11 +465,28 @@ class TaskExecutor:
     def _locate(self, screenshot_path: str, target_desc: str) -> tuple[Optional[tuple[int, int]], str]:
         """在截图中定位 target_desc 描述的元素，返回 (坐标, 分析文本)。
 
-        支持两种定位方式：
+        支持三种定位方式：
+        - cua_backend (trycua/qwen-ui): 统一 CUA backend 定位（优先）
         - omniparser: YOLO+OCR 解析元素列表 + 文字匹配（不需要 VLM，快且准）
         - vlm: 视觉模型直接输出坐标（需要 Ollama VLM，慢且不准）
         """
+        # 定位策略：OmniParser（YOLO+OCR 文字匹配）实测最准最稳，作主路径。
+        # CUA backend（trycua UIA / qwen-ui VLM）仅当 OmniParser 未命中时兜底。
         if self.locate_method == "omniparser":
+            res = self._locate_omniparser(screenshot_path, target_desc)
+            if res[0] is not None:
+                return res
+            # OmniParser 未命中 → 尝试 CUA backend 定位
+            if self.cua_backend is not None:
+                loc = self.cua_backend.locate(screenshot_path, target_desc)
+                if loc.found:
+                    return (loc.to_tuple(), loc.analysis)
+            return res
+        # 非 omniparser（vlm）模式
+        if self.cua_backend is not None:
+            loc = self.cua_backend.locate(screenshot_path, target_desc)
+            if loc.found:
+                return (loc.to_tuple(), loc.analysis)
             return self._locate_omniparser(screenshot_path, target_desc)
         return self._locate_vlm(screenshot_path, target_desc)
 
@@ -375,14 +503,17 @@ class TaskExecutor:
             elem = self._omniparser.find_element(elements, target_desc, screenshot_path)
             if elem:
                 cx, cy = elem["center"]
-                # 如果匹配到的元素高度小（label/placeholder），向下偏移到实际输入框
-                # label 通常在输入框上方 20-30px
                 if elem.get("bbox"):
                     bx1, by1, bx2, by2 = elem["bbox"]
                     h = by2 - by1
-                    if h < 35:  # label/小文字区域高度小
-                        cy += 25  # 向下偏移到输入框
+                    if h < 35:  # label/小文字区域高度小 → 向下偏移到输入框
+                        cy += 25
                         self.logger.info(f"Label 偏移: ({cx},{cy-25}) → ({cx},{cy})")
+                    elif h > 60:
+                        # OCR 把相邻多行元素合并成大框（如右键菜单 Copy+Paste+Cut 合并）：
+                        # 目标文字通常在最顶部，点击框的上 1/4 处而非中心
+                        cy = by1 + h // 4
+                        self.logger.info(f"高元素修正: 高度{h}px, center({cx},{cy}) → 上1/4({cx},{cy})")
                 return (cx, cy), f'OmniParser: 找到「{elem.get("text", target_desc)}」at ({cx},{cy})'
             return None, f"OmniParser: 未找到「{target_desc}」，检测到 {len(elements)} 个元素"
         except Exception as exc:
@@ -428,7 +559,18 @@ class TaskExecutor:
     # ------------------------------------------------------------- utils
     def _capture(self, name: str) -> str:
         path = self.shot_dir / f"{name}.png"
-        # 后台模式：截特定窗口；前台模式：截全屏
+        # CUA backend 模式：用 capture_screen()（mss 全屏）。
+        # 关键：PrintWindow 截窗口对浏览器页面是空白的（页面内容不渲染，
+        # 见 skill troubleshooting），必须全屏截图。前提是目标窗口在前台
+        # （bench_runner 已 _activate_window）。坐标=屏幕绝对坐标。
+        if self.cua_backend is not None:
+            # CUA backend：截目标窗口（get_window_state，不依赖前台），坐标=窗口内
+            try:
+                return self.cua_backend.capture(str(path), self.window_keyword)
+            except Exception:
+                # 回退全屏
+                img = shot.capture_screen()
+                return shot.save_screenshot(img, path)
         kw = self.window_keyword if self.backend == "background" else None
         img = shot.capture(window_keyword=kw)
         return shot.save_screenshot(img, path)

@@ -41,6 +41,7 @@ def bench_command(
     all_tasks: bool = typer.Option(False, "--all", help="运行全部任务"),
     output: str = typer.Option(None, "--output", help="结果输出 JSON 路径"),
     backend: str = typer.Option("background", "--backend", help="截图后端：background（PrintWindow截窗口）或 foreground（截全屏）"),
+    cua_backend: str = typer.Option("", "--cua-backend", help="CUA 后端：trycua / qwen-ui（留空走默认）"),
 ) -> None:
     """运行 cua-bench 基准测试。"""
     data_dir = find_bench_data_dir()
@@ -66,12 +67,12 @@ def bench_command(
         raise typer.Exit(1)
 
     if all_tasks:
-        results = runner.run_suite(backend=backend)
+        results = runner.run_suite(backend=backend, cua_backend_name=cua_backend or None)
     else:
         task = runner.load_task(task_name, variant_index=variant)
         console.print(f"[cyan]任务：[/cyan]{task.description}")
-        console.print(f"[dim]评估：{task.evaluate_js} == {task.expected_value} | 后端：{backend}[/dim]")
-        result = runner.run_task(task, backend=backend)
+        console.print(f"[dim]评估：{task.evaluate_js} == {task.expected_value} | 后端：{backend} | CUA：{cua_backend or '默认'}[/dim]")
+        result = runner.run_task(task, backend=backend, cua_backend_name=cua_backend or None)
         results = [result]
 
     # 打印结果表

@@ -26,6 +26,9 @@ from typing import Any, Optional
 
 from .browser_session import BrowserSession
 
+import logging as _logging
+_log = _logging.getLogger(__name__)
+
 
 def _move_cursor_away_bench(inp_module) -> None:
     """截图前把光标移到屏幕右下角，避免遮挡界面元素。"""
@@ -258,18 +261,24 @@ class BenchRunner:
         if slider_match:
             html = html.replace("{{LABEL}}", slider_match.group(1).strip())
             html = html.replace("{{TARGET_VALUE}}", slider_match.group(2).strip())
-        # 兜底：如果 HTML 里还有未替换的 {{xxx}}，用描述里的关键词替换
-        remaining = re.findall(r'\{\{(\w+)\}\}', html)
+        # 兜底：HTML 里未替换的 {{xxx}} 用默认值清理，保证页面可独立渲染
+        # （bench 运行时变体值优先；残留 = 描述没提取到 → 默认值兜底）
+        remaining = re.findall(r"\{\{(\w+)\}\}", html)
         if remaining:
-            # 从描述中提取可能的值
+            default_map = {
+                "BUTTON_TEXT": "Submit",
+                "FIELD_LABEL": "Username",
+                "LABEL": "Volume",
+                "TARGET_VALUE": "50",
+                "TEXT": "Hello World",
+                "INITIAL_STATE": "paused",
+            }
             for var in remaining:
-                # 常见变量名映射
-                if var == "FIELD_LABEL" and label_match:
-                    continue  # 已处理
-                # 从描述中提取引号内容作为兜底
-                quoted = re.search(r'"([^"]+)"', desc)
-                if quoted:
-                    html = html.replace(f"{{{{{var}}}}}", quoted.group(1))
+                val = default_map.get(var)
+                if val is None:
+                    quoted = re.search(r'"([^"]+)"', desc)
+                    val = quoted.group(1) if quoted else var
+                html = html.replace("{{" + var + "}}", val)
 
         return BenchTask(
             task_id=f"{task_name}_{variant_index}",
@@ -289,6 +298,7 @@ class BenchRunner:
         planner_model: Optional[str] = None,
         vision_model: Optional[str] = None,
         backend: str = "background",
+        cua_backend_name: Optional[str] = None,
     ) -> BenchResult:
         """执行单个任务：浏览器打开页面 → region-cua 操作 → 评估。
 
@@ -391,29 +401,59 @@ class BenchRunner:
                 task_dir = self.output_dir / task.task_id
                 task_dir.mkdir(parents=True, exist_ok=True)
                 monitor = Monitor(max_failures=max_steps)
+                # Browser session knows the real window title (from HTML <title>)
+                brower_title = browser.title
+                _log.info(f"[{task.task_id}] Browser window title: {brower_title!r}")
+                # 可选 CUA backend（trycua / qwen-ui）：统一接口，截图+定位+执行都走它
+                cua_backend = None
+                if cua_backend_name:
+                    from ..cua.factory import make_backend
+
+                    cua_backend = make_backend(cua_backend_name)
+                    if cua_backend is None:
+                        _log.warning(f"[{task.task_id}] 未知 CUA backend: {cua_backend_name!r}，回退默认路径")
                 executor = TaskExecutor(
                     client, vmodel, task_dir, monitor,
                     record_video=False, record_log=True, verify=True,
                     video_fps=settings.video_fps,
                     backend=backend,
-                    window_keyword=task.task_id,  # 前后台都用，用于激活窗口
+                    window_keyword=brower_title,  # use real browser title for activation
                     locate_method="omniparser",
+                    cua_backend=cua_backend,
                 )
 
                 try:
                     records = executor.execute(plan)
-                except Exception:
+                except Exception as exec_exc:
+                    import traceback
+                    tb_str = traceback.format_exc()
+                    _log.error(f"[{task.task_id}] Executor exception:\n{tb_str}")
                     records = executor.step_records
+                    error = f"Executor crash: {exec_exc}\n\n{tb_str}"
+                    try:
+                        with open(r"C:\Users\zjycas\AppData\Local\Temp\bench_debug.txt", 'a') as _f:
+                            _f.write(f"EXECUTOR CRASH [{task.task_id}]: {exec_exc}\n{tb_str}\n")
+                    except Exception:
+                        pass
 
                 steps = len(records)
 
                 # 3. 评估：读浏览器窗口标题（观察器 JS 写入 BENCH_DONE:x.x）
-                score = browser.wait_done(timeout=10)
+                # 给足时间：点击生效 → 观察器 500ms 轮询 → 写入标题，链上需要数秒
+                _log.info(f"[{task.task_id}] browser.title={browser.title!r}, calling wait_done(25)")
+                score = browser.wait_done(timeout=25)
+                _log.info(f"[{task.task_id}] wait_done returned: {score}")
                 client.close()
                 traj_path = str(task_dir / "trajectory.jsonl")
 
         except Exception as exc:
             error = str(exc)[:200]
+            import traceback as _tb
+            try:
+                with open(r"C:\Users\zjycas\AppData\Local\Temp\bench_debug.txt", 'a') as _f:
+                    _f.write(f"RUN_TASK CRASH [{task.task_id}]: {exc}\n{_tb.format_exc()}\n")
+            except Exception:
+                pass
 
         duration = _time.time() - t0
         return BenchResult(
@@ -433,6 +473,7 @@ class BenchRunner:
         *,
         max_steps: int = 15,
         backend: str = "background",
+        cua_backend_name: Optional[str] = None,
     ) -> list[BenchResult]:
         """批量运行多个任务。"""
         if task_names is None:
@@ -445,7 +486,7 @@ class BenchRunner:
         with self._prevent_sleep():
             results: list[BenchResult] = []
             for name in task_names:
-                console_print(f"▶ 运行任务: {name} (backend={backend})")
+                console_print(f"▶ 运行任务: {name} (backend={backend}, cua={cua_backend_name or '-'})")
                 try:
                     task = self.load_task(name, variant_index=0)
                 except Exception as exc:
@@ -455,7 +496,8 @@ class BenchRunner:
                     ))
                     continue
 
-                result = self.run_task(task, max_steps=max_steps, backend=backend)
+                result = self.run_task(task, max_steps=max_steps, backend=backend,
+                                       cua_backend_name=cua_backend_name)
                 results.append(result)
                 console_print(
                     f"  {'✅' if result.success else '❌'} "

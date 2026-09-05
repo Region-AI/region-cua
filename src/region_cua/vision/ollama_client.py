@@ -58,34 +58,54 @@ class OllamaClient:
         images: Iterable[Any] | None = None,
         think: bool = False,
     ) -> str:
-        """调用 /api/chat，返回 assistant 文本内容。
+        """调用 Ollama，返回 assistant 文本内容。
 
         images 可为：文件路径(str)、bytes、PIL.Image.Image 的任意混合。
+
+        关键避坑（2026-08-31 实测）：有图像时必须走 /api/generate 的 images 字段。
+        /api/chat 的 images 字段对视觉模型不生效（模型会回答"纯文本模式，看不到图"），
+        导致所有视觉验证/定位静默失败（报"未提供截图"）。无图时才走 /api/chat。
         """
-        payload: dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "think": think,
-        }
-        if images:
-            payload["images"] = [self._to_b64(img) for img in images]
+        b64_list = [self._to_b64(img) for img in images] if images else None
+        # 取最后一条 user 消息的文本作为 prompt（generate 用 prompt 而非 messages）
+        prompt = ""
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                c = m.get("content")
+                prompt = c if isinstance(c, str) else str(c or "")
+                break
         try:
+            if b64_list:
+                # 视觉输入走 /api/generate（Ollama 0.32 实测唯一生效路径）
+                payload: dict[str, Any] = {
+                    "model": model,
+                    "prompt": prompt,
+                    "images": b64_list,
+                    "stream": False,
+                }
+                resp = self._client.post(f"{self.host}/api/generate", json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                return str(data.get("response") or "")
+            # 无图：走 /api/chat（保留 think 参数支持）
+            payload = {
+                "model": model,
+                "messages": messages,
+                "stream": False,
+                "think": think,
+            }
             resp = self._client.post(f"{self.host}/api/chat", json=payload)
             resp.raise_for_status()
+            data = resp.json()
+            msg = data.get("message") or {}
+            content = msg.get("content")
+            if content is None:
+                content = ""
+            return str(content)
         except httpx.HTTPError as exc:
             raise OllamaError(f"Ollama 请求失败: {exc}") from exc
-
-        try:
-            data = resp.json()
         except json.JSONDecodeError as exc:
             raise OllamaError(f"Ollama 返回非 JSON: {exc}") from exc
-
-        msg = data.get("message") or {}
-        content = msg.get("content")
-        if content is None:
-            content = ""
-        return str(content)
 
     # --------------------------------------------------------------- helpers
     @staticmethod

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import re
 import tempfile
 import time
@@ -19,6 +20,8 @@ import webbrowser
 from pathlib import Path
 from typing import Optional
 from ctypes import wintypes
+
+_log = logging.getLogger(__name__)
 
 
 def _user32():
@@ -134,6 +137,10 @@ class BrowserSession:
 
     def start(self) -> None:
         """打开系统浏览器加载任务 HTML。"""
+        # 先杀掉所有残留 Edge 实例（含手动开的旧窗口），保证全新窗口隔离。
+        # 否则多 Edge 实例会混淆 window 标题匹配 → 截图/操作打到错窗口。
+        self._kill_existing_edge()
+
         # 构建带观察器的完整 HTML
         observer = _build_observer(self.eval_js, self.expected_value)
         full_html = self._inject_observer(self._html, observer)
@@ -301,9 +308,12 @@ class BrowserSession:
         t0 = time.time()
         while time.time() - t0 < timeout:
             score = self.get_score()
+            window_title = self._get_window_title()
             if score is not None:
+                _log.info(f"[{self.title}] get_score returned {score}, title={window_title!r}")
                 return score
             time.sleep(1.0)
+        _log.warning(f"[{self.title}] wait_done TIMEOUT after {timeout}s, last title={self._get_window_title()!r}")
         return 0.0
 
     def _find_window(self) -> Optional[int]:
@@ -313,6 +323,9 @@ class BrowserSession:
 
         @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
         def _enum(hwnd, _lparam):
+            # 只匹配可见窗口（迅雷等后台 Chromium 窗口标题可能是 'index.html' 造成误匹配）
+            if not user32.IsWindowVisible(hwnd):
+                return True
             length = user32.GetWindowTextLengthW(hwnd)
             if length > 0:
                 buf = ctypes.create_unicode_buffer(length + 1)
@@ -323,6 +336,25 @@ class BrowserSession:
             return True
 
         user32.EnumWindows(_enum, 0)
+        if not results:
+            # Debug dump ALL windows so we know what's really on screen
+            dbg = []
+            @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+            def _dbg(hwnd, _):
+                ln = user32.GetWindowTextLengthW(hwnd)
+                if ln > 5:
+                    buf = ctypes.create_unicode_buffer(ln + 1)
+                    user32.GetWindowTextW(hwnd, buf, ln + 1)
+                    dbg.append(f"  {buf.value!r}")
+                return True
+            user32.EnumWindows(_dbg, 0)
+            try:
+                with open(r"C:\Users\zjycas\AppData\Local\Temp\bench_debug.txt", 'a') as _f:
+                    _f.write(f"_find_window FAILED: self.title={self.title!r}\nAll windows:\n")
+                    for d in dbg[:30]:
+                        _f.write(d + "\n")
+            except Exception:
+                pass
         return results[0] if results else None
 
     def _get_window_title(self) -> Optional[str]:
@@ -337,6 +369,24 @@ class BrowserSession:
         buf = ctypes.create_unicode_buffer(length + 1)
         user32.GetWindowTextW(hwnd, buf, length + 1)
         return buf.value
+
+    @staticmethod
+    def _kill_existing_edge() -> None:
+        """杀掉所有残留 Edge 实例（含手动打开的旧窗口），保证全新窗口隔离。
+
+        用 ctypes/taskkill 杀 msedge 进程；失败不阻塞（尽力而为）。
+        注意：taskkill 输出是 GBK 编码，必须用 errors=replace 避免 UnicodeDecodeError
+        被静默吞掉（否则清理不可靠，残留 tab 会干扰后续任务截图/点击）。
+        """
+        import subprocess
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "msedge.exe"],
+                capture_output=True, timeout=8, encoding="utf-8", errors="replace",
+            )
+            time.sleep(1.5)
+        except Exception:
+            pass
 
     def close(self) -> None:
         """关闭浏览器窗口（发 WM_CLOSE）和清理临时文件。"""

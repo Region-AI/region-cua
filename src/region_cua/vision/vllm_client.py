@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -95,7 +96,7 @@ class VLLMClient:
     def _to_b64(img: Any) -> str:
         if isinstance(img, (bytes, bytearray)):
             return base64.b64encode(img).decode()
-        if isinstance(img, str):
+        if isinstance(img, (str, os.PathLike)):  # 含 pathlib.Path / WindowsPath
             return base64.b64encode(Path(img).read_bytes()).decode()
         try:
             buf = io.BytesIO()
