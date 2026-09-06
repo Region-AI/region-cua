@@ -28,6 +28,17 @@ def _user32():
     return ctypes.windll.user32  # type: ignore[attr-defined]
 
 
+def _get_window_text(hwnd) -> str:
+    """读取窗口标题文本。"""
+    user32 = _user32()
+    length = user32.GetWindowTextLengthW(hwnd)
+    if length <= 0:
+        return ""
+    buf = ctypes.create_unicode_buffer(length + 1)
+    user32.GetWindowTextW(hwnd, buf, length + 1)
+    return buf.value or ""
+
+
 # 注入到任务 HTML 中的观察器脚本
 # 原理：cua-bench 任务的评估 JS 检查 window.__xxx 全局变量
 # 我们每 500ms 轮询一次，变量变为期望值时写入 document.title
@@ -364,6 +375,14 @@ class BrowserSession:
                         _f.write(d + "\n")
             except Exception:
                 pass
+        # 优先返回含 BENCH_DONE 的窗口（评分阶段），其次页面文件名，最后原标题
+        for _h in results:
+            if "BENCH_DONE" in _get_window_text(_h):
+                return _h
+        if page_name:
+            for _h in results:
+                if page_name in _get_window_text(_h):
+                    return _h
         return results[0] if results else None
 
     def _get_window_title(self) -> Optional[str]:

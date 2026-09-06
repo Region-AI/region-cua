@@ -548,7 +548,17 @@ class TaskExecutor:
             '{"success": true/false, "reason": "简短中文说明"}\n只输出 JSON。'
         )
         try:
-            return self.client.chat(
+            # 验证是辅助信息，不允许卡住主流程：用独立短超时客户端（默认 600s 太长，
+            # ollama 挂起/超载时任务会卡 10 分钟）。30s 足够 qwen 视觉模型单次判断。
+            from ..vision.ollama_client import OllamaClient
+
+            client = self.client
+            if hasattr(client, "timeout") and getattr(client, "timeout", 0) > 30:
+                try:
+                    client = OllamaClient(client.host, timeout=30)
+                except Exception:
+                    client = self.client
+            return client.chat(
                 self.vision_model,
                 [{"role": "user", "content": prompt}],
                 images=[screenshot_path],
