@@ -320,23 +320,25 @@ def workflow_date_picker(executor, step) -> str:
                     pass
             bx, by = tuple(getattr(cua, "_win_bounds", (0, 0)))
             executor.logger.info(f"[DatePicker] 方案B _target_pid={getattr(cua,'_target_pid',None)} wid={getattr(cua,'_target_window_id',None)} bounds=({bx},{by})")
-            # 用 UIA date input 的 Edit/年段 frame 精确定位（比 OmniParser 视觉定位准，偏差可达 200px）
+            # 用 UIA 精确定位（优先 element_token 点击，不依赖屏幕坐标；失败回退 frame+pyautogui）
             cx, cy = None, None
+            year_token = None
             if hasattr(cua, "_target_pid") and cua._target_pid:
                 try:
-                    # 页面可能未加载完（frame 会异常大，如 448 宽），重试直到 frame 合理
                     for _attempt in range(3):
                         ws = cua._call("get_window_state", {"pid": cua._target_pid, "window_id": cua._target_window_id}, timeout=40)
-                        # 优先用年 Spinner（精确的输入段）
+                        # 优先年 Spinner token（精确输入段，UIA 直接点击不依赖坐标）
                         for e in (ws.get("elements") or []):
                             if e.get("role") == "Spinner" and "年" in str(e.get("label", "")):
+                                year_token = e.get("element_token")
                                 f = e.get("frame")
-                                executor.logger.info(f"[DatePicker] UIA 年Spinner frame={f}")
+                                executor.logger.info(f"[DatePicker] UIA 年Spinner token={'有' if year_token else '无'} frame={f}")
+                                if year_token:
+                                    break
                                 if f and isinstance(f, dict) and 10 <= f.get("w", 0) <= 80:
                                     cx = f.get("x", 0) + f.get("w", 0) / 2 + bx
                                     cy = f.get("y", 0) + f.get("h", 0) / 2 + by
-                                    break
-                        if cx is not None:
+                        if year_token or cx is not None:
                             break
                         # 回退：Edit frame
                         for e in (ws.get("elements") or []):
@@ -367,19 +369,31 @@ def workflow_date_picker(executor, step) -> str:
                     pass
             if cx is None:
                 cx, cy = int(coords[0]) + int(bx), int(coords[1]) + int(by)
-            executor.logger.info(f"[DatePicker] 前台点击输入框 ({cx},{cy}) 聚焦 + 年优先连续输入 {yyyy}{mm}{dd}")
-            pyautogui.click(cx, cy)
+            # 优先 UIA element_token 点击年段（精确，不依赖屏幕坐标/窗口位置）
+            clicked_ok = False
+            if year_token:
+                try:
+                    rc = cua._call("click", {"pid": cua._target_pid, "window_id": cua._target_window_id, "element_token": year_token})
+                    executor.logger.info(f"[DatePicker] UIA token 点击年段: {str(rc)[:100]}")
+                    clicked_ok = True
+                except Exception as exc:
+                    executor.logger.info(f"[DatePicker] UIA token 点击失败: {exc}")
+            if not clicked_ok:
+                executor.logger.info(f"[DatePicker] 前台点击输入框 ({cx},{cy}) 聚焦 + 连写输入 {yyyy}{mm}{dd}")
+                pyautogui.click(cx, cy)
             time.sleep(0.5)
             pyautogui.hotkey("ctrl", "a")  # 清空
             time.sleep(0.2)
-            # Chrome date input：聚焦年段后连写输入 YYYYMMDD（受控实测有效），Tab 确认 + Enter 触发 change
-            pyautogui.typewrite(f"{yyyy}{mm}{dd}", interval=0.05)
-            time.sleep(0.3)
-            pyautogui.press("tab")
-            time.sleep(0.2)
+            # Chrome date input：年段输入 → 右方向键到月段 → 输入 → 右方向键到日段 → 输入 → Enter
+            # （受控实测：Tab 会跳出输入框，方向键在 date input 段间移动正确）
+            for seg in (yyyy, mm, dd):
+                pyautogui.typewrite(seg, interval=0.05)
+                time.sleep(0.2)
+                pyautogui.press("right")  # 段间移动（年→月→日）
+                time.sleep(0.2)
             pyautogui.press("enter")  # 触发 change
             time.sleep(0.6)
-            executor.logger.info(f"[DatePicker] 前台连写+Tab输入完成: {yyyy}{mm}{dd}")
+            executor.logger.info(f"[DatePicker] 方向键跳段输入完成: {yyyy}/{mm}/{dd}")
             return f"日期选择器：前台输入 {yyyy}/{mm}/{dd}"
         except Exception as exc:
             import traceback
@@ -747,7 +761,44 @@ def workflow_color_picker(executor, step) -> str:
         except Exception as exc:
             executor.logger.info(f"融合布局失败: {exc}")
 
-    # 5. SAM3 + VLM 验证颜色
+    # 5. SAM3 + 像素颜色验证（确定性，零 VLM 依赖；VLM 验证慢且会超时）
+    #    先读每个 SAM3 色块区域中心像素 RGB，匹配目标颜色。
+    _COLOR_RGB = {
+        "red": (255, 0, 0), "green": (0, 255, 0), "blue": (0, 0, 255),
+        "yellow": (255, 255, 0), "cyan": (0, 255, 255), "magenta": (255, 0, 255),
+        "orange": (255, 165, 0), "purple": (128, 0, 128), "black": (0, 0, 0),
+        "white": (255, 255, 255), "gray": (128, 128, 128), "grey": (128, 128, 128),
+        "pink": (255, 192, 203), "brown": (165, 42, 42), "lime": (0, 255, 0),
+    }
+    target_rgb = _COLOR_RGB.get(color.lower())
+    if sam3_segments and target_rgb:
+        try:
+            from PIL import Image as _Img2
+            _img2 = _Img2.open(before).convert("RGB")
+            for _seg in sam3_segments:
+                _bb = _seg.get("bbox") or _seg.get("box")
+                if not isinstance(_bb, (list, tuple)) or len(_bb) < 4:
+                    continue
+                _x1, _y1, _x2, _y2 = [int(v) for v in _bb[:4]]
+                if _x2 <= _x1 or _y2 <= _y1:
+                    continue
+                _cx2 = (_x1 + _x2) // 2
+                _cy2 = (_y1 + _y2) // 2
+                try:
+                    _px = _img2.getpixel((_cx2, _cy2))[:3]
+                except Exception:
+                    continue
+                _match = all(abs(int(_px[i]) - int(target_rgb[i])) < 40 for i in range(3))
+                if _match:
+                    # 色块中心即点击位置（色块 80x80，中心偏移 ~15px 进入纯色区）
+                    cx, cy = _cx2, _cy2
+                    executor.logger.info(f"[ColorPicker] 像素验证命中 {color} RGB={_px} at ({cx},{cy}) (SAM3 色块)")
+                    inp.click_at(cx, cy)
+                    return f"颜色选择器：像素验证定位 {color} at ({cx},{cy})"
+        except Exception as exc:
+            executor.logger.info(f"[ColorPicker] 像素颜色验证失败: {exc}")
+
+    # 5b. SAM3 + VLM 验证颜色（像素验证未命中时回退 VLM）
     if sam3_segments:
         try:
             from PIL import Image as _Img
@@ -849,37 +900,72 @@ def workflow_fill_form(executor, step) -> str:
     try:
         from ..vision.omniparser import OmniParser
         parser = executor._omniparser or OmniParser(box_threshold=0.01)
-        all_text = parser.parse(before)
-        executor.logger.info(f"[Form] OCR detected {len(all_text)} text elements")
+        # 用 EasyOCR raw 文字（_detect_text，bbox 准）而非 YOLO button 元素。
+        # YOLO 会把输入框 placeholder 检测成 button 且 bbox 错位（如 center=(382,205) 偏右 260px）。
+        if hasattr(parser, "_detect_text"):
+            from PIL import Image as _PILImage
+            import numpy as _np
+            _arr = _np.array(_PILImage.open(before).convert("RGB"))
+            all_text = parser._detect_text(_arr)
+            # _detect_text 只有 bbox，补 center 字段（供字段定位循环使用）
+            for _e in all_text:
+                _bb = _e.get("bbox")
+                if isinstance(_bb, (list, tuple)) and len(_bb) >= 4 and "center" not in _e:
+                    _e["center"] = [(_bb[0] + _bb[2]) / 2, (_bb[1] + _bb[3]) / 2]
+        else:
+            all_text = parser.parse(before)
+        executor.logger.info(f"[Form] OCR detected {len(all_text)} text elements (EasyOCR raw)")
     except Exception as exc:
         return f"表单填写：OCR失败: {exc}"
 
     field_positions = []  # (x, y, label, fill_text_or_None, click_input_x_y)
+    # placeholder 关键词：输入框内的提示文字（点击它必在输入框内部，比 label+偏移可靠）
+    PLACEHOLDER_KEYS = {
+        "Name": ["enter your full name", "your full name"],
+        "Email": ["example.com", "your email", "@example", "example com"],
+        "Age": ["enter your age", "your age"],
+        "Country": ["select a country", "select country"],
+        "Comments": ["enter any additional", "additional comments"],
+    }
     for label_target, fill_value, ftype in FORM_FIELDS:
         found = False
         best_match = None
         best_distance = float("inf")
+        # 优先匹配 placeholder（输入框内文字，点击中心必中输入框）
+        placeholder_keys = PLACEHOLDER_KEYS.get(label_target, [])
         for elem in all_text:
-            etext = str(elem.get("text", "")).strip()
-            elower = etext.lower()
-            # For multi-word labels (like "Subscribe to newsletter"), check partial match
-            if label_target.lower() == elower:
-                best_match = (elem, 0)
+            etext = str(elem.get("text", "")).strip().lower()
+            for pk in placeholder_keys:
+                if pk in etext and len(etext) <= 60:
+                    best_match = (elem, 0)
+                    found = True
+                    break
+            if found:
                 break
-            elif label_target.lower() in elower and len(etext) <= 50:
-                cx, cy = elem.get("center", [999, 999])
-                d = abs(cx - 500) + abs(cy - 400)  # prefer center of page
-                if d < best_distance:
-                    best_match = (elem, d)
-                    best_distance = d
+        if not found:
+            for elem in all_text:
+                etext = str(elem.get("text", "")).strip()
+                elower = etext.lower()
+                # For multi-word labels (like "Subscribe to newsletter"), check partial match
+                if label_target.lower() == elower:
+                    best_match = (elem, 0)
+                    break
+                elif label_target.lower() in elower and len(etext) <= 50:
+                    cx, cy = elem.get("center", [999, 999])
+                    d = abs(cx - 500) + abs(cy - 400)  # prefer center of page
+                    if d < best_distance:
+                        best_match = (elem, d)
+                        best_distance = d
 
         if best_match:
             elem, _ = best_match
             cx, cy = tuple(int(v) for v in elem.get("center", [999, 999]))
-            # For text/select fields, click below the label (typical input position)
-            # For checkbox/radio, click directly on the element
+            # 命中 placeholder 时点击其中心（必在输入框内）；否则 label+偏移兜底
             if ftype in ("text", "select"):
-                input_x, input_y = cx + 20, cy + 18
+                if found:  # placeholder 命中
+                    input_x, input_y = cx, cy
+                else:      # label 命中：label 与输入框间距 ~32px
+                    input_x, input_y = cx + 20, cy + 32
             else:
                 input_x, input_y = cx + 5, cy
             field_positions.append((cx, cy, label_target, fill_value, (input_x, input_y)))
@@ -895,18 +981,49 @@ def workflow_fill_form(executor, step) -> str:
     field_positions.sort(key=lambda f: f[1])
 
     # Step C & D: Fill each field using click + type + tab navigation
+    # 前台激活保障：background click 可能让 Chromium 窗口失焦，type 需前台窗口接收按键
+    try:
+        import pyautogui as _pya
+    except Exception:
+        _pya = None
     filled_count = 0
     for idx, (label_x, label_y, label, fill_value, (input_x, input_y)) in enumerate(field_positions):
         executor.logger.info(f"  [{idx+1}/{len(field_positions)}] Clicking {label} at ({input_x},{input_y})")
 
+        # 每次操作前确保窗口在前台（SendInput 需要前台窗口接收）
+        try:
+            executor._activate_target_window()
+            time.sleep(0.25)
+        except Exception:
+            pass
+
         # Determine action by field type
         if label == "Country":
-            # Select dropdown — click select, Down ONCE (USA is index 1 after placeholder), Enter to confirm
-            inp.click_at(input_x, input_y)
-            time.sleep(0.2)
+            # Select dropdown — click select（原生 select 需真实鼠标点击展开），
+            # Down ONCE (USA is index 1 after placeholder), Enter to confirm
+            if _pya is not None and getattr(executor, "cua_backend", None) is not None:
+                try:
+                    bx, by = tuple(getattr(executor.cua_backend, "_win_bounds", (0, 0)))
+                    _pya.click(input_x + bx, input_y + by)
+                    time.sleep(0.3)
+                except Exception:
+                    inp.click_at(input_x, input_y)
+                    time.sleep(0.3)
+            else:
+                inp.click_at(input_x, input_y)
+                time.sleep(0.3)
             inp.press_key("down")  # Navigate past placeholder → USA
-            time.sleep(0.15)
+            time.sleep(0.25)
             inp.press_key("return")
+            # pyautogui 前台 Down/Enter 兜底（原生 select 展开的下拉需要前台键盘事件）
+            if _pya is not None and getattr(executor, "cua_backend", None) is not None:
+                try:
+                    _pya.press("down")
+                    time.sleep(0.15)
+                    _pya.press("enter")
+                    time.sleep(0.15)
+                except Exception:
+                    pass
             executor.logger.info(f"    ✅ Selected USA from {label} dropdown (Down×1)")
         elif label == "Subscribe to newsletter":
             # Checkbox <input> is LEFT of the text label — click left of label text
@@ -921,11 +1038,38 @@ def workflow_fill_form(executor, step) -> str:
             inp.click_at(rd_x, rd_y)
             executor.logger.info(f"    ✅ Clicked {label} radio at ({rd_x},{rd_y})")
         elif fill_value:
-            # Text input — click and type
-            inp.click_at(input_x, input_y)
-            time.sleep(0.2)
-            inp.type_text(fill_value)
-            executor.logger.info(f"    ✅ Typed: '{fill_value}' into {label}")
+            # Text input — pyautogui 前台点击聚焦 + 剪贴板粘贴（Ctrl+V）。
+            # 剪贴板方案字符 100% 精确（避开 typewrite 对 @ . 空格的映射错乱），
+            # pyautogui 真实鼠标点击必然聚焦（cua-driver background 点击不聚焦导致 type 串位）。
+            _done = False
+            if _pya is not None and getattr(executor, "cua_backend", None) is not None:
+                try:
+                    import ctypes as _ct
+                    bx, by = tuple(getattr(executor.cua_backend, "_win_bounds", (0, 0)))
+                    _pya.click(input_x + bx, input_y + by)
+                    time.sleep(0.25)
+                    # 全选清空
+                    _pya.hotkey("ctrl", "a")
+                    time.sleep(0.1)
+                    # 剪贴板写入 + Ctrl+V 粘贴（pyperclip，字符精确）
+                    import pyperclip
+                    pyperclip.copy(fill_value)
+                    _pya.hotkey("ctrl", "v")
+                    time.sleep(0.2)
+                    _done = True
+                    executor.logger.info(f"    ✅ [剪贴板粘贴] '{fill_value}' into {label}")
+                except Exception as exc:
+                    executor.logger.info(f"    ⚠ 剪贴板输入失败: {exc}，回退 executor 路径")
+            if not _done:
+                inp.click_at(input_x, input_y)
+                time.sleep(0.3)
+                try:
+                    inp.hotkey("ctrl", "a")
+                    time.sleep(0.1)
+                except Exception:
+                    pass
+                inp.type_text(fill_value)
+                executor.logger.info(f"    ✅ Typed: '{fill_value}' into {label}")
 
         filled_count += 1
         # Tab to next field (last field is Comments — submit button follows it in tab order)
@@ -952,11 +1096,25 @@ def _do_scroll_and_click_submit(executor):
 
     max_scrolls = 5
     for attempt in range(max_scrolls):
-        # 1. Pagedown — works in browser, fast way to scroll one page
-        inp.press_key("pagedown")
-        time.sleep(0.3)
+        # 0. 确保窗口前台（滚轮事件需要前台窗口接收）
+        try:
+            executor._activate_target_window()
+            time.sleep(0.2)
+        except Exception:
+            pass
+        # 1. Pagedown + mouse wheel — 用 pyautogui 前台滚动（cua-driver scroll 对 Chromium 可能静默无效）
+        try:
+            import pyautogui as _pya
+            bx, by = tuple(getattr(executor.cua_backend, "_win_bounds", (0, 0))) if getattr(executor, "cua_backend", None) else (0, 0)
+            # 鼠标移到窗口内容区中部滚动（页面内容在窗口 y~80 以下）
+            _pya.moveTo(bx + 300, by + 300)
+            time.sleep(0.1)
+            _pya.scroll(-600)  # 大幅向下滚（wheel 向上为负）
+            time.sleep(0.2)
+        except Exception:
+            inp.press_key("pagedown")
         # 2. Mouse wheel backup (in case pagedown doesn't work on this platform)
-        inp.scroll(-50)
+        inp.scroll(-200)
         time.sleep(0.4)
 
         screenshot = executor._capture(f"workflow_submit_scroll_attempt_{attempt}")
@@ -1060,17 +1218,66 @@ def workflow_select_dropdown(executor, step) -> str:
     except Exception as exc:
         return f"Dropdown OCR failed: {exc}"
 
-    # Find select element — 优先匹配 select 框自身的文字（"Select a fruit"），
-    # fallback 用 "Choose a fruit" 标签下方偏移
+    # 优先用 EasyOCR 精确定位 select placeholder 文字（"Select a fruit" 真实位置，
+    # 点击它必在 select 框内）。UIA ComboBox frame 在 Tailwind 注入后可能异常（448 宽），
+    # OmniParser 视觉定位也会偏。EasyOCR bbox 实测最准。
     select_click = None
-    for elem in elements:
-        text = str(elem.get("text", "")).strip().lower()
-        # select 框 placeholder 文字（点击目标就是它）
-        if "select a fruit" in text or ("select" in text and len(text) < 30 and "fruit" in text):
-            cx, cy = tuple(int(v) for v in elem.get("center", [0, 0]))
-            select_click = (cx, cy)  # 直接点击 select 框
-            executor.logger.info(f"[Dropdown] 定位到 select 框: {elem.get('text')} at ({cx},{cy})")
-            break
+    executor._use_uia_click = False
+    try:
+        import easyocr as _eocr_first
+        import numpy as _np_first
+        from PIL import Image as _PIL_first
+        _rd_first = _eocr_first.Reader(["en"], gpu=False, verbose=False)
+        _arr_first = _np_first.array(_PIL_first.open(before).convert("RGB"))
+        _res_first = _rd_first.readtext(_arr_first)
+        for _item_first in _res_first:
+            if len(_item_first) < 3:
+                continue
+            _box_f, _text_f, _conf_f = _item_first[0], _item_first[1], _item_first[2]
+            _tl_f = str(_text_f).strip().lower()
+            if "select a fruit" in _tl_f and float(_conf_f) > 0.3:
+                _xs_f = [p[0] for p in _box_f]
+                _ys_f = [p[1] for p in _box_f]
+                select_click = (int((min(_xs_f) + max(_xs_f)) / 2), int((min(_ys_f) + max(_ys_f)) / 2))
+                executor.logger.info(f"[Dropdown] EasyOCR 精确定位 select placeholder ({select_click[0]},{select_click[1]})")
+                break
+    except Exception as exc:
+        executor.logger.info(f"[Dropdown] EasyOCR 定位 select 失败: {exc}")
+
+    cua = getattr(executor, "cua_backend", None)
+    if select_click is None and cua is not None and getattr(cua, "_target_pid", None):
+        try:
+            # 页面可能未加载完（frame 异常大 448 宽），重试直到 frame 合理
+            for _attempt in range(3):
+                ws = cua._call("get_window_state", {"pid": cua._target_pid, "window_id": cua._target_window_id}, timeout=40)
+                bx, by = tuple(getattr(cua, "_win_bounds", (0, 0)))
+                for e in (ws.get("elements") or []):
+                    if e.get("role") == "ComboBox" and "fruit" in str(e.get("label", "")).lower():
+                        f = e.get("frame")
+                        executor.logger.info("[Dropdown] UIA ComboBox frame={} bounds=({},{})".format(f, bx, by))
+                        if f and isinstance(f, dict) and 80 <= f.get("w", 0) <= 600:
+                            cx = f.get("x", 0) + f.get("w", 0) / 2 - bx
+                            cy = f.get("y", 0) + f.get("h", 0) / 2 - by
+                            select_click = (int(cx), int(cy))
+                            executor._use_uia_click = True
+                            executor.logger.info("[Dropdown] UIA ComboBox 窗口内坐标: ({},{})".format(select_click[0], select_click[1]))
+                            break
+                if select_click:
+                    break
+                time.sleep(1.5)
+        except Exception as exc:
+            executor.logger.info("[Dropdown] UIA ComboBox 定位失败: {}".format(exc))
+
+    # Find select element — 优先匹配 select 框自身的文字
+    if not select_click:
+        for elem in elements:
+            text = str(elem.get("text", "")).strip().lower()
+            # select 框 placeholder 文字（点击目标就是它）
+            if "select a fruit" in text or ("select" in text and len(text) < 30 and "fruit" in text):
+                cx, cy = tuple(int(v) for v in elem.get("center", [0, 0]))
+                select_click = (cx, cy)  # 直接点击 select 框
+                executor.logger.info(f"[Dropdown] 定位到 select 框: {elem.get('text')} at ({cx},{cy})")
+                break
     if not select_click:
         # fallback: "Choose a fruit" 标签下方 ~48px（select 框实际位置）
         for elem in elements:
@@ -1091,12 +1298,35 @@ def workflow_select_dropdown(executor, step) -> str:
         return "Dropdown: could not find select element"
 
     executor.logger.info(f"[Dropdown] Clicking select at {select_click}")
-    inp.click_at(*select_click)
-    time.sleep(0.8)  # 等下拉展开
+    # 原生 <select> 展开下拉需要真实鼠标点击（PostMessage/background 点击不触发展开）。
+    # UIA ComboBox frame 定位时坐标是窗口内坐标，转屏幕坐标用 pyautogui 前台点击；
+    # 非 UIA 定位（OmniParser 全屏/窗口坐标）统一走 executor.click。
+    import pyautogui as _pya_dd
+    bx0, by0 = (0, 0)
+    if getattr(executor, "cua_backend", None) is not None:
+        bx0, by0 = tuple(getattr(executor.cua_backend, "_win_bounds", (0, 0)))
+
+    def _click_select(px, py):
+        """用 pyautogui 前台点击（真实鼠标事件，原生 select 可靠展开）。"""
+        try:
+            _pya_dd.click(int(px) + bx0, int(py) + by0)
+        except Exception as exc:
+            executor.logger.info(f"[Dropdown] pyautogui 点击失败: {exc}，回退 executor.click")
+            inp.click_at(px, py)
+
+    _click_select(*select_click)
+    time.sleep(1.0)  # 等下拉展开
 
     # 方法1：下拉展开后直接点击目标选项（原生 select 弹出原生下拉，选项是可见 DOM）
-    # 重新截图 + OmniParser 定位目标选项文字
+    # 重新截图 + OmniParser 定位目标选项文字；若下拉没展开（找不到选项）则用
+    # EasyOCR 精确定位 select placeholder 重试点击，最多 3 次
+    import easyocr as _eocr
+    _eocr_reader = None
     try:
+        _eocr_reader = _eocr.Reader(["en"], gpu=False, verbose=False)
+    except Exception:
+        pass
+    for _expand_attempt in range(3):
         after_click = executor._capture("workflow_dropdown_after")
         op2 = _OP(box_threshold=0.01)
         els2 = op2.parse(after_click)
@@ -1116,11 +1346,34 @@ def workflow_select_dropdown(executor, step) -> str:
         if target_opt:
             ox, oy = tuple(int(v) for v in target_opt["center"])
             executor.logger.info(f"[Dropdown] Found option '{target_option}' at ({ox},{oy})，直接点击")
-            inp.click_at(ox, oy)
-            time.sleep(0.5)
+            _click_select(ox, oy)
+            time.sleep(0.6)
             return f"✅ Dropdown: clicked option '{target_option}' at ({ox},{oy})"
-    except Exception as exc:
-        executor.logger.info(f"[Dropdown] 直接点击选项失败: {exc}，回退键盘导航")
+        # 下拉没展开：用 EasyOCR 精确定位 select placeholder 文字重试点击
+        if _eocr_reader is not None:
+            try:
+                from PIL import Image as _PIL
+                import numpy as _nparr
+                _ocr_res = _eocr_reader.readtext(_nparr.array(_PIL.open(after_click).convert("RGB")))
+                for _item in _ocr_res:
+                    if len(_item) < 3:
+                        continue
+                    _box_p, _text_p, _conf_p = _item[0], _item[1], _item[2]
+                    _tl = str(_text_p).strip().lower()
+                    if "select a fruit" in _tl and float(_conf_p) > 0.3:
+                        _xs = [p[0] for p in _box_p]
+                        _ys = [p[1] for p in _box_p]
+                        _rx = int((min(_xs) + max(_xs)) / 2)
+                        _ry = int((min(_ys) + max(_ys)) / 2)
+                        executor.logger.info(f"[Dropdown] 未展开，EasyOCR 定位 select placeholder ({_rx},{_ry}) 重试点击 ({_expand_attempt+1}/3)")
+                        _click_select(_rx, _ry)
+                        time.sleep(1.0)
+                        break
+            except Exception as exc:
+                executor.logger.info(f"[Dropdown] EasyOCR 重试定位失败: {exc}")
+    else:
+        # for-else：3 次都没展开/选中，继续键盘导航兜底
+        executor.logger.info("[Dropdown] 展开下拉失败，走键盘导航兜底")
 
     # 方法2：键盘导航（点击后下拉已聚焦，逐字母跳转 + Enter）
     typed = target_option[:3].lower()

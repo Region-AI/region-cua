@@ -317,7 +317,14 @@ class BrowserSession:
         return 0.0
 
     def _find_window(self) -> Optional[int]:
-        """找到标题包含 self.title 或 BENCH_DONE 的窗口句柄。"""
+        """找到标题包含 self.title、BENCH_DONE 或页面文件名的窗口句柄。
+
+        兼容三个标题阶段：
+        1. 页面加载前：窗口标题可能是 "index.html - Microsoft Edge"（_resize_window 阶段）
+        2. 观察器注入后：document.title 被改成 self.title（任务名）
+        3. 评分完成：title 变为 BENCH_DONE:1.0
+        """
+        page_name = Path(self._temp_file).name if getattr(self, "_temp_file", None) else None
         results: list[int] = []
         user32 = _user32()
 
@@ -330,8 +337,10 @@ class BrowserSession:
             if length > 0:
                 buf = ctypes.create_unicode_buffer(length + 1)
                 user32.GetWindowTextW(hwnd, buf, length + 1)
-                # 匹配原标题或 BENCH_DONE（观察器改了 document.title 后窗口标题会变）
-                if self.title in buf.value or "BENCH_DONE" in buf.value:
+                title = buf.value
+                # 匹配原标题、BENCH_DONE，或页面文件名（加载中窗口标题是 'index.html - ...'）
+                if (self.title in title or "BENCH_DONE" in title
+                        or (page_name and page_name in title)):
                     results.append(hwnd)
             return True
 

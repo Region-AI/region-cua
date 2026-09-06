@@ -407,14 +407,42 @@ class TryCuaBackend(CuaBackend):
         res = self._call("type_text", args)
         # Chromium/Electron 内容 WM_CHAR 会静默丢弃，驱动返回 background_unavailable
         # 按驱动指示：background 失败 → foreground 重试（SendInput，Chromium 会接收）
-        if res.get("refused") or "background_unavailable" in str(res) or "noop" in str(res).lower():
+        need_fg = res.get("refused") or "background_unavailable" in str(res) or "noop" in str(res).lower()
+        if need_fg:
             args["delivery_mode"] = "foreground"
             res2 = self._call("type_text", args)
             if res2.get("refused") or "background_unavailable" in str(res2):
-                raise RuntimeError(f"type_text 失败(foreground): {res2}")
+                # foreground 也失败：剪贴板粘贴兜底（type 前已有 click 聚焦输入框）
+                self._clipboard_paste(text)
+                return
+            # foreground 返回 unverifiable（type 可能没生效）→ 剪贴板粘贴兜底
+            if "unverifiable" in str(res2).lower():
+                self._clipboard_paste(text)
         elif res.get("effect") == "suspected_noop":
             args["delivery_mode"] = "foreground"
-            self._call("type_text", args)
+            res3 = self._call("type_text", args)
+            if res3.get("refused") or "unverifiable" in str(res3).lower():
+                self._clipboard_paste(text)
+
+    def _clipboard_paste(self, text: str) -> None:
+        """剪贴板粘贴兜底：type_text 对 Chromium 不可靠（unverifiable/background_unavailable）时用 Ctrl+V。
+
+        前提：type 前已有 click 聚焦目标输入框。剪贴板字符 100% 精确，
+        避开 SendInput/WM_CHAR 对 Chromium 的静默丢弃与 @ . 空格映射错乱。
+        """
+        try:
+            import pyperclip
+            import pyautogui
+            pyperclip.copy(text)
+            # 确保目标窗口在前台（Ctrl+V 需要前台窗口）
+            try:
+                self.activate_window("")
+            except Exception:
+                pass
+            pyautogui.hotkey("ctrl", "v")
+            logging.getLogger(__name__).info(f"type_text 剪贴板粘贴兜底: {text!r}")
+        except Exception as exc:
+            raise RuntimeError(f"type_text 剪贴板粘贴兜底失败: {exc}")
 
     def hotkey(self, *keys: str) -> None:
         flat: list[str] = []

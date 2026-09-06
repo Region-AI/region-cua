@@ -146,6 +146,95 @@ metadata:
     (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
 
 
+# --------------------------------------------------------- UIA 全量元素遍历
+# 「自由探索」时枚举/点击验证界面上所有可交互元素（Windows UIA 无障碍树）。
+# 经验沉淀：uia 中心点=物理像素可直接喂 pyautogui.click（须 DPI-aware）；
+# 页面状态用 Text 控件 Name 集合做指纹；NAV(右缘<win.left+100)/TITLE(top<win.top+45) 跳过。
+
+INTERACTIVE_ROLES = {"Button", "Edit", "TabItem", "Hyperlink", "MenuItem", "ComboBox",
+                     "CheckBox", "RadioButton", "SplitButton", "Link"}
+DANGEROUS_KEYWORDS = ["删除", "清空", "退出", "登出", "注销", "重置", "移除",
+                      "Delete", "Logout"]
+
+
+def enumerate_ui_elements(
+    hwnd: int,
+    roles: set[str] | None = None,
+    exclude_dangerous: bool = True,
+    nav_band: int = 100,
+    title_band: int = 45,
+    min_area: int = 60,
+) -> list[dict]:
+    """枚举窗口 UIA 无障碍树中所有可交互元素（Windows）。
+
+    Args:
+        hwnd: 目标窗口句柄（可见窗口，非进程 ID）。
+        roles: 要收集的角色集合，默认 INTERACTIVE_ROLES。
+        exclude_dangerous: 跳过名称含危险词的元素（删除/退出/清空等），
+            破坏性按钮只应出现在可执行的自造测试数据清理里。
+        nav_band: 左侧导航栏判定宽度（rect.right - win.left < nav_band）。
+        title_band: 顶部标题栏判定高度（rect.top - win.top < title_band）。
+        min_area: 忽略小于该面积(px²)的元素（噪音）。
+
+    Returns:
+        [{"role","name","tag","rect","cx","cy","area"}, ...]，
+        tag ∈ {"NAV","TITLE","PAGE"}。
+        注意：uiautomation 的 BoundingRectangle 是 DPI 物理像素，
+        调用方须先 `ctypes.windll.shcore.SetProcessDpiAwareness(2)`，
+        中心点 (cx,cy) 才能直接用于 pyautogui.click。
+        未暴露为可交互角色的元素（Electron div 组件）枚举不到 → 需辅以视觉定位。
+    """
+    import ctypes
+
+    import uiautomation as ua  # 延迟导入，无桌面环境不报错
+
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        pass
+    win_rect = None
+    try:
+        r = ua.ControlFromHandle(hwnd).BoundingRectangle
+        win_rect = (r.left, r.top)
+    except Exception:
+        win_rect = (0, 0)
+
+    roles = roles or INTERACTIVE_ROLES
+    out: list[dict] = []
+
+    def walk(ctrl, depth: int = 0, max_depth: int = 60) -> None:
+        try:
+            role = ctrl.ControlTypeName.replace("Control", "")
+            if role in roles and not ctrl.IsOffscreen:
+                r = ctrl.BoundingRectangle
+                name = (ctrl.Name or "")[:90]
+                if r.right - win_rect[0] < nav_band:
+                    tag = "NAV"
+                elif r.top - win_rect[1] < title_band:
+                    tag = "TITLE"
+                else:
+                    tag = "PAGE"
+                if exclude_dangerous and any(k in name for k in DANGEROUS_KEYWORDS):
+                    return
+                area = r.width() * r.height()
+                if area >= min_area:
+                    out.append({
+                        "role": role[:10], "name": name, "tag": tag,
+                        "rect": [r.left, r.top, r.right, r.bottom],
+                        "cx": (r.left + r.right) // 2,
+                        "cy": (r.top + r.bottom) // 2,
+                        "area": area,
+                    })
+            if depth < max_depth:
+                for ch in ctrl.GetChildren():
+                    walk(ch, depth + 1, max_depth)
+        except Exception:
+            pass
+
+    walk(ua.ControlFromHandle(hwnd))
+    return out
+
+
 # ----------------------------------------------------------------- compile
 def _read_document(path: Path) -> str:
     suf = path.suffix.lower()

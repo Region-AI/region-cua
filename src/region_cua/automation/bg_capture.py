@@ -52,13 +52,53 @@ def _get_window_rect(hwnd: int) -> Optional[tuple[int, int, int, int]]:
     return None
 
 
+def _setup_gdi_argtypes() -> None:
+    """为 GDI/user32 句柄 API 设置 64 位 argtypes，避免句柄被截断为 32 位 int。
+
+    不设置 argtypes 时，ctypes 把 HWND/HDC/HBITMAP 当普通 int 传入，
+    64 位系统上高 32 位被截断 → SelectObject 报
+    ``OverflowError: int too long to convert``，或返回陈旧同帧。
+    实测：PrintWindow 对 Electron/Chromium 应用还可能静默返回旧帧
+    （跨多页截图 md5 相同）——调用方务必对确定不同的两页做 sanity check。
+    """
+    u = _user32()
+    g = _gdi32()
+    u.GetWindowDC.restype = wintypes.HDC
+    u.GetWindowDC.argtypes = [wintypes.HWND]
+    u.ReleaseDC.restype = wintypes.BOOL
+    u.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+    g.CreateCompatibleDC.restype = wintypes.HDC
+    g.CreateCompatibleDC.argtypes = [wintypes.HDC]
+    g.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+    g.CreateCompatibleBitmap.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+    g.SelectObject.restype = wintypes.HGDIOBJ
+    g.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+    g.DeleteObject.restype = wintypes.BOOL
+    g.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+    g.DeleteDC.restype = wintypes.BOOL
+    g.DeleteDC.argtypes = [wintypes.HDC]
+    g.GetDIBits.restype = ctypes.c_int
+    g.GetDIBits.argtypes = [
+        wintypes.HDC, wintypes.HBITMAP, ctypes.c_uint, ctypes.c_uint,
+        ctypes.c_void_p, wintypes.LPVOID, ctypes.c_uint,
+    ]
+
+
 def capture_window(hwnd: int):
     """用 PrintWindow 截取指定窗口，返回 PIL.Image.Image。
 
     使用 PW_RENDERFULLCONTENT (0x00000002) 标志，能截到更多窗口类型的内容。
+
+    ⚠️ 局限（实测，2026-09-05）：
+    - 需 64 位句柄 argtypes（见 ``_setup_gdi_argtypes``），否则 OverflowError；
+    - PrintWindow 对 Electron/Chromium 应用可能**静默返回陈旧同帧**
+      （跨多页截图 md5 相同），导致像素 diff/视觉复核全部失真。
+      → 调用方务必先对两个确定不同的页面各截一张、比较 md5/相似度
+        （``compute_similarity``），相同则改用 ``capture_screen()`` 全屏 + 物理坐标裁剪。
     """
     from PIL import Image
 
+    _setup_gdi_argtypes()
     rect = _get_window_rect(hwnd)
     if not rect:
         raise ValueError(f"无法获取窗口 {hwnd} 的矩形区域")
