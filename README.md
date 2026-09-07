@@ -106,35 +106,35 @@ RegionCUA 提供三个递进的能力层次，底层能力向上支撑：
 - 生成完整的系统使用说明文档
 - 编译为 Skill，供后续任务模式高效使用
 
-### 4.3 操作后端
+### 4.3 执行实现
 
-RegionCUA 支持多种操作后端，分为「基础截图后端」与「CUA 执行后端」两层：
+RegionCUA 提供**三套执行实现**，通过 `--backend` / `--cua-backend` 选择。三者在「截图→定位→操作」全链路上互相独立，可 A/B 对比：
 
-#### 基础后端：前台 / 后台（`--backend`）
+| 实现 | 截图 | 定位 | 执行 | 抢光标 | 被遮挡/锁屏 |
+|------|------|------|------|--------|------------|
+| **自研（foreground）** | pyautogui 全屏 | OmniParser → EasyOCR → VLM（公共定位链） | pyautogui 真实鼠标键盘 | 是 | 失效 |
+| **自研（background）** | Win32 PrintWindow 截窗口 | 同上（公共定位链） | UIA / PostMessage 后台 | **否** | **仍可工作** |
+| **trycua** | cua-driver `get_window_state` 截窗口（pid+window_id） | **UIA 控件树文本匹配** + 像素/VLM 兜底 | cua-driver PostMessage 后台 | **否** | **仍可工作** |
+| **qwen-ui** | 同 trycua（复用执行手） | **VLM grounding**（端到端看截图输出坐标） | 同 trycua（cua-driver） | **否** | **仍可工作** |
 
-| 后端 | 截图方式 | 操作方式 | 是否抢光标 | 被遮挡/锁屏 |
-|------|---------|---------|-----------|------------|
-| `foreground`（默认） | pyautogui 截全屏 | pyautogui 鼠标键盘 | 是 | 失效 |
-| `background` | PrintWindow 截特定窗口 | UIA / PostMessage | **否** | **仍可工作** |
-
-后台模式借鉴了 trycua/cua 的核心思路——Agent 在后台操作应用，不影响用户当前工作。实现上用 Win32 PrintWindow API 截取目标窗口（即使被遮挡），用 UI Automation / PostMessage 执行点击和输入（不移动实际鼠标）。
-
-#### CUA 执行后端（`--cua-backend`）
-
-基准测试（`region-cua bench`）与统一执行路径支持接入专用 CUA 执行后端，通过 `cua/factory.py` 统一接口切换：
-
-| 后端 | 定位方式 | 执行方式 | 特点 |
-|------|---------|---------|------|
-| `trycua` | **UIA 控件树文本匹配**（结构化、稳，不依赖 VLM） | cua-driver（PostMessage 后台，不抢前台） | 阿里 cua-driver CLI 适配层，控件树定位优先，像素/VLM 兜底 |
-| `qwen-ui` | **视觉大模型直接看截图输出坐标**（Qwen-UI-Agent grounding 能力） | 复用 cua-driver（与 trycua 同一执行手） | 端到端 VLM 定位，Ollama ROCm GPU 加速视觉 |
+> 注：`foreground` / `background` 是**自研实现**内部的两种截图/输入模式（是否抢光标），不是独立后端；trycua / qwen-ui 是接入外部 CUA 驱动的两套完整实现。
 
 ```bash
-# 基准测试时指定 CUA 执行后端
+# 自研：前台（默认，抢光标）
+uv run region-cua run "打开记事本写一段文字"
+
+# 自研：后台（不抢光标，被遮挡可工作）
+uv run region-cua run "打开记事本写一段文字" --backend background
+
+# CUA 后端（基准测试常用）
 uv run region-cua bench --all --cua-backend trycua
 uv run region-cua bench --all --cua-backend qwen-ui
 ```
 
-两个 CUA 后端差异只在「视觉定位」策略——trycua 用 UIA 控件树（结构化、稳），qwen-ui 用 VLM grounding（端到端视觉定位）；执行层共用 cua-driver，保证 A/B 评测时执行一致。
+**三套实现的差异定位**：
+- **自研**：不依赖任何外部驱动，定位走公共链（OmniParser+EasyOCR 实测最准），执行走 pyautogui / Win32 UIA+PostMessage；foreground 简单可靠但抢光标，background 后台不打扰但 PrintWindow 对 Chromium 内容可能截空（bench 已规避）。
+- **trycua**：UIA 控件树结构化定位最稳（不依赖视觉模型），执行走 cua-driver 后台 PostMessage；适合控件密集的桌面/网页应用。Chromium 内容后台点击偶发不生效时自动升级 pyautogui 前台兜底。
+- **qwen-ui**：纯视觉端到端定位（适合无 UIA 控件树的环境），执行复用 cua-driver，与 trycua 保持同一执行手，保证 A/B 评测只差定位策略。
 
 #### 视觉回退链
 

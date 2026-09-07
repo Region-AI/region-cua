@@ -104,35 +104,35 @@ Post-exploration:
 - Generate a complete system usage guide
 - Compile into a Skill for efficient use in subsequent task mode
 
-### 4.3 Operation Backends
+### 4.3 Execution Implementations
 
-RegionCUA supports multiple operation backends, split into "base capture backends" and "CUA execution backends":
+RegionCUA provides **three execution implementations**, selected via `--backend` / `--cua-backend`. They are fully independent across the "capture → locate → act" chain, enabling A/B comparison:
 
-#### Base Backend: Foreground / Background (`--backend`)
+| Implementation | Capture | Locate | Act | Steals Cursor | Obscured / Locked |
+|----------------|---------|--------|-----|---------------|-------------------|
+| **Built-in (foreground)** | pyautogui full-screen | OmniParser → EasyOCR → VLM (shared locating chain) | pyautogui real mouse/keyboard | Yes | Fails |
+| **Built-in (background)** | Win32 PrintWindow per-window | same (shared locating chain) | UIA / PostMessage background | **No** | **Still works** |
+| **trycua** | cua-driver `get_window_state` (pid+window_id) | **UIA control-tree text matching** + pixel/VLM fallback | cua-driver PostMessage background | **No** | **Still works** |
+| **qwen-ui** | same as trycua (reuses its executor) | **VLM grounding** (end-to-end screenshot → coordinates) | same as trycua (cua-driver) | **No** | **Still works** |
 
-| Backend | Capture | Action | Steals Cursor | Obscured / Locked |
-|---------|---------|--------|---------------|-------------------|
-| `foreground` (default) | pyautogui full-screen | pyautogui mouse/keyboard | Yes | Fails |
-| `background` | PrintWindow per-window | UIA / PostMessage | **No** | **Still works** |
-
-The background mode borrows the core idea of trycua/cua — the agent operates applications in the background without disturbing the user. It uses the Win32 PrintWindow API to capture the target window (even when obscured) and UI Automation / PostMessage to click and type (without moving the real mouse).
-
-#### CUA Execution Backend (`--cua-backend`)
-
-The benchmark (`region-cua bench`) and unified execution path support pluggable CUA execution backends, switched through the unified `cua/factory.py` interface:
-
-| Backend | Locating | Executing | Notes |
-|---------|----------|-----------|-------|
-| `trycua` | **UIA control-tree text matching** (structured, stable, no VLM) | cua-driver (PostMessage background, no cursor steal) | Alibaba cua-driver CLI adapter; control-tree first, pixel/VLM fallback |
-| `qwen-ui` | **VLM looks at the screenshot and outputs coordinates** (Qwen-UI-Agent grounding) | reuses cua-driver (same executor as trycua) | end-to-end VLM locating; Ollama ROCm GPU-accelerated vision |
+> Note: `foreground` / `background` are the **two capture/input modes inside the built-in implementation** (whether they steal the cursor) — not independent backends. trycua / qwen-ui are two complete implementations backed by external CUA drivers.
 
 ```bash
-# Benchmark with a specific CUA execution backend
+# Built-in: foreground (default, steals cursor)
+uv run region-cua run "Write a paragraph in Notepad"
+
+# Built-in: background (no cursor steal, works when obscured)
+uv run region-cua run "Write a paragraph in Notepad" --backend background
+
+# CUA backends (commonly used in benchmarks)
 uv run region-cua bench --all --cua-backend trycua
 uv run region-cua bench --all --cua-backend qwen-ui
 ```
 
-The two CUA backends differ only in the "vision locating" strategy — trycua uses the UIA control tree (structured, stable), qwen-ui uses VLM grounding (end-to-end visual locating); they share the same cua-driver executor so A/B benchmarks keep execution identical.
+**How the three differ**:
+- **Built-in**: no external driver dependency; locating uses the shared chain (OmniParser+EasyOCR measured most accurate); acting uses pyautogui / Win32 UIA+PostMessage. Foreground is simple and reliable but steals the cursor; background doesn't disturb the user but PrintWindow may capture Chromium content blank (mitigated in bench).
+- **trycua**: UIA control-tree locating is the most stable (no vision model needed); acting uses cua-driver background PostMessage; suited for control-dense desktop/web apps. When Chromium content ignores background clicks, it auto-escalates to pyautogui foreground fallback.
+- **qwen-ui**: pure end-to-end visual locating (for environments without a UIA control tree); acting reuses cua-driver, keeping the same executor as trycua so A/B benchmarks differ only in the locating strategy.
 
 #### Vision Fallback Chain
 
