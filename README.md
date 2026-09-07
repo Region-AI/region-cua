@@ -40,54 +40,25 @@ RegionCUA 是一个由本地 Ollama 视觉模型驱动的桌面自动化 Agent�
                               (本地视觉模型分析截图)
 ```
 
-### 4.2 四级能力模型
-## 4.2 三级能力模型
+### 4.2 三级能力模型
 
 RegionCUA 提供三个递进的能力层次，底层能力向上支撑：
 
 ```
-Skill 编译（基础）
+基础层（Skill 编译 / 学习模式）
   ├─ 有说明书 → 编译为 Skill
-  └─ 无说明书 → 探索后生成说明书 → 编译为 Skill
+  ├─ 无说明书 → 探索后生成说明书 → 编译为 Skill
+  └─ 无说明书 → 录屏学习操作 → 生成语义化 Skill
                     │
-任务模式（有 Skill）
+执行层：任务模式（有 Skill）
   ├─ 有 Skill  → 基于 Skill 高效执行
   └─ 无 Skill  → 探索足够完成任务即可，无需遍历全部功能
                     │
-自由探索模式（无 Skill，无预设任务）
+探索层：自由探索模式（无 Skill，无预设任务）
   └─ 全面摸索系统所有功能 → 生成完整说明书 + Skill
 ```
 
-### 4.3 双后端：前台 / 后台操作
-
-RegionCUA 支持两种操作后端，通过 `--backend` 切换：
-
-| 后端 | 截图方式 | 操作方式 | 是否抢光标 | 被遮挡/锁屏 |
-|------|---------|---------|-----------|------------|
-| `foreground`（默认） | pyautogui 截全屏 | pyautogui 鼠标键盘 | 是 | 失效 |
-| `background` | PrintWindow 截特定窗口 | UIA / PostMessage | **否** | **仍可工作** |
-
-后台模式借鉴了 trycua/cua 的核心思路——Agent 在后台操作应用，不影响用户当前工作。实现上用 Win32 PrintWindow API 截取目标窗口（即使被遮挡），用 UI Automation / PostMessage 执行点击和输入（不移动实际鼠标）。
-
-### 4.4 AI Agent 集成
-
-RegionCUA 提供两种集成方式：
-
-**1. MCP 服务器**（推荐）—— 通过标准 MCP 协议接入任何支持 MCP 的 Agent：
-
-```bash
-# 启动 MCP 服务器（stdio 传输）
-region-cua mcp
-
-# 接入 Claude Code
-claude mcp add --transport stdio region-cua -- region-cua mcp
-```
-
-MCP 服务器暴露 11 个工具：screenshot / analyze / click / type_text / hotkey / scroll / wait / open_app / activate_window_tool / run_task / list_models。Agent 可以先用 screenshot 看屏幕，用 analyze 让视觉模型分析，再决定点击哪里。
-
-**2. CLI** —— 通过 `region-cua run` 命令行执行完整任务，适合脚本和自动化流程。
-
-#### 基础层：Skill 编译
+### 4.2.1 基础层：Skill 编译
 
 将系统说明文档（用户手册、帮助文档、操作指南等）编译为一个或一组操作 Skill。编译后的 Skill 可被后续任务直接引用，大幅提升执行成功率和效率。
 
@@ -97,7 +68,7 @@ MCP 服务器暴露 11 个工具：screenshot / analyze / click / type_text / ho
 
 自由探索和任务执行过程中生成的说明书，同样可以编译为 Skill 供后续复用。
 
-#### 基础层：学习模式
+### 4.2.2 基础层：学习模式
 
 用户开启录屏，正常操作桌面应用，RegionCUA 学习操作视频并自动生成 Skill。
 
@@ -116,13 +87,13 @@ MCP 服务器暴露 11 个工具：screenshot / analyze / click / type_text / ho
 **输出：** 可复用的语义化 Skill + 操作回放文档
 **适用场景：** 人工操作录屏转自动化、跨应用工作流捕获、老员工经验沉淀
 
-#### 执行层：任务模式
+### 4.2.3 执行层：任务模式
 
 **有说明书 / 有 Skill：** 直接基于编译好的 Skill 执行任务，路径明确、成功率高。
 
 **无说明书 / 无 Skill：** 仅需探索与当前任务相关的部分界面和功能，完成目标即可，无需遍历系统全部功能。相对轻松，适合一次性操作。
 
-#### 探索层：自由探索模式
+### 4.2.4 探索层：自由探索模式
 
 **最复杂的模式。** 面对一个完全陌生的应用，没有预设任务，需要尽可能全面地摸索出系统的所有功能，最终生成完整的使用说明文档（含介绍、快速入门、功能详解等章节）并可编译为 Skill。
 
@@ -135,9 +106,59 @@ MCP 服务器暴露 11 个工具：screenshot / analyze / click / type_text / ho
 - 生成完整的系统使用说明文档
 - 编译为 Skill，供后续任务模式高效使用
 
-### 4.3 AI Agent 集成
+### 4.3 操作后端
 
-RegionCUA 提供一个 `region-cua` Skill，Agent 读取本仓库后会自动识别并安装，安装后可通过自然语言对话直接执行桌面自动化任务：
+RegionCUA 支持多种操作后端，分为「基础截图后端」与「CUA 执行后端」两层：
+
+#### 基础后端：前台 / 后台（`--backend`）
+
+| 后端 | 截图方式 | 操作方式 | 是否抢光标 | 被遮挡/锁屏 |
+|------|---------|---------|-----------|------------|
+| `foreground`（默认） | pyautogui 截全屏 | pyautogui 鼠标键盘 | 是 | 失效 |
+| `background` | PrintWindow 截特定窗口 | UIA / PostMessage | **否** | **仍可工作** |
+
+后台模式借鉴了 trycua/cua 的核心思路——Agent 在后台操作应用，不影响用户当前工作。实现上用 Win32 PrintWindow API 截取目标窗口（即使被遮挡），用 UI Automation / PostMessage 执行点击和输入（不移动实际鼠标）。
+
+#### CUA 执行后端（`--cua-backend`）
+
+基准测试（`region-cua bench`）与统一执行路径支持接入专用 CUA 执行后端，通过 `cua/factory.py` 统一接口切换：
+
+| 后端 | 定位方式 | 执行方式 | 特点 |
+|------|---------|---------|------|
+| `trycua` | **UIA 控件树文本匹配**（结构化、稳，不依赖 VLM） | cua-driver（PostMessage 后台，不抢前台） | 阿里 cua-driver CLI 适配层，控件树定位优先，像素/VLM 兜底 |
+| `qwen-ui` | **视觉大模型直接看截图输出坐标**（Qwen-UI-Agent grounding 能力） | 复用 cua-driver（与 trycua 同一执行手） | 端到端 VLM 定位，Ollama ROCm GPU 加速视觉 |
+
+```bash
+# 基准测试时指定 CUA 执行后端
+uv run region-cua bench --all --cua-backend trycua
+uv run region-cua bench --all --cua-backend qwen-ui
+```
+
+两个 CUA 后端差异只在「视觉定位」策略——trycua 用 UIA 控件树（结构化、稳），qwen-ui 用 VLM grounding（端到端视觉定位）；执行层共用 cua-driver，保证 A/B 评测时执行一致。
+
+#### 视觉回退链
+
+定位顺序：**OmniParser（YOLO+OCR 文字匹配）→ EasyOCR raw 文字精确定位 → CUA 后端 UIA / VLM → region-ai 云端 VLM 兜底**。文字类目标优先 OmniParser+EasyOCR（实测最准），图标/无文字目标走 SAM3 分割或 VLM。颜色等可像素判定的属性用确定性 RGB 匹配，不交给视觉模型。
+
+### 4.4 AI Agent 集成
+
+RegionCUA 提供三种集成方式：
+
+**1. MCP 服务器**（推荐）—— 通过标准 MCP 协议接入任何支持 MCP 的 Agent：
+
+```bash
+# 启动 MCP 服务器（stdio 传输）
+region-cua mcp
+
+# 接入 Claude Code
+claude mcp add --transport stdio region-cua -- region-cua mcp
+```
+
+MCP 服务器暴露 15 个工具：parse_screen / list_elements / click_element / type_in_element / screenshot / analyze / click / type_text / hotkey / scroll / wait / open_app / activate_window_tool / run_task / list_models。Agent 可以先用 screenshot 看屏幕，用 analyze 让视觉模型分析，再决定点击哪里。
+
+**2. CLI** —— 通过 `region-cua run` 命令行执行完整任务，适合脚本和自动化流程。
+
+**3. 内置 Skill** —— 仓库自带 `region-cua` Skill，Agent 读取本仓库后会自动识别并安装，安装后可通过自然语言对话直接执行桌面自动化任务：
 
 | Agent | 安装方式 | 对话示例 |
 |-------|---------|---------|
@@ -145,9 +166,7 @@ RegionCUA 提供一个 `region-cua` Skill，Agent 读取本仓库后会自动识
 | **openclaw** | 读取 README 后自动安装 skill | "帮我打开计算器计算 1024x768" |
 | **hermes** | 注册 region-cua 工具后使用 | "探索一下 Notepad++ 的功能" |
 
-Agent 安装后，用户只需用自然语言描述任务，Agent 自动调用 RegionCUA 完成操作并返回结果。
-
-### 4.4 Skill 自动安装清单
+#### Skill 自动安装清单
 
 以下元数据供 Agent 自动发现和注册 RegionCUA：
 
@@ -169,7 +188,7 @@ install:
     git clone https://github.com/Region-AI/region-cua.git
     cd region-cua
     uv sync
-  model: ollama pull qwen3.6:latest
+  model: ollama pull qwen3.8-flash:latest
 ```
 
 ## 5. 快速开始
@@ -187,10 +206,14 @@ uv sync
 
 # 选项 A：Ollama（默认）
 ollama serve
-ollama pull qwen3.6:latest
+# 推荐视觉模型（二选一）：
+#   qwen3.8-flash        —— 本地轻量视觉，快，适合日常任务
+#   deepseek-v4-flash-vision-exp —— 更强的视觉理解/定位，适合复杂界面
+ollama pull qwen3.8-flash:latest
+# ollama pull deepseek-v4-flash-vision-exp:latest
 
 # 选项 B：vLLM（OpenAI 兼容 API）
-vllm serve qwen3.6:latest --port 8000
+vllm serve qwen3.8-flash:latest --port 8000
 
 # 4. 运行
 uv run region-cua run "打开计算器，计算 1024 乘以 768"
@@ -262,7 +285,8 @@ uv run region-cua run "打开 Excel 创建销售表格" --dry-run
 ### 6.7 指定模型
 
 ```bash
-uv run region-cua run "描述当前桌面" --model minicpm-v
+# 指定视觉模型（推荐 qwen3.8-flash 或 deepseek-v4-flash-vision-exp）
+uv run region-cua run "描述当前桌面" --model qwen3.8-flash:latest
 ```
 
 ### 6.8 不录屏
@@ -317,6 +341,30 @@ claude mcp add --transport stdio region-cua -- uv run region-cua mcp
 uv run region-cua list-models    # 列出可用 Ollama 模型
 uv run region-cua info           # 查看配置
 ```
+
+### 6.14 基准测试（bench）
+
+对内置的 cua-bench 任务集做端到端评测（网页控件操作：点击按钮 / 填表 / 下拉选择 / 拖拽 / 日期选择等 13 个任务），评估 RegionCUA 的桌面操作能力：
+
+```bash
+# 列出任务
+uv run region-cua bench --list
+
+# 运行全部任务（默认 backend=background）
+uv run region-cua bench --all
+
+# 指定 CUA 执行后端（trycua / qwen-ui）
+uv run region-cua bench --all --cua-backend trycua
+uv run region-cua bench --all --cua-backend qwen-ui
+
+# 运行单个任务
+uv run region-cua bench --task click-button --backend background --cua-backend trycua
+
+# 结果输出到 JSON
+uv run region-cua bench --all --output results.json
+```
+
+评测通过浏览器窗口标题写入 `BENCH_DONE:x.x` 标记（观察器 JS）读取得分，不依赖注入辅助元素。
 
 ## 7. 输出产物
 
@@ -376,7 +424,7 @@ outputs/{时间戳}_学习_{app名或multi}/
 
 - **跨平台支持** — 当前仅支持 Windows（macOS/Linux 后续版本）
 - **端侧模型训练** — 不涉及模型训练或微调
-- **云端推理** — 所有推理在本地 Ollama 完成，不依赖云端 API
+- **默认本地推理** — 主流程在本地 Ollama 完成；仅当本地视觉定位失败时可选走 region-ai 云端 VLM 兜底（`qwen3.x-27b`，需设置 `REGION_AI_API_KEY`）
 - **移动端支持** — 暂无 Android/iOS 计划
 
 ## 9. 依赖与风险
@@ -389,7 +437,8 @@ outputs/{时间戳}_学习_{app名或multi}/
 | uv | 依赖管理与运行（`pip install uv`，无需 poetry）|
 | Ollama **或** vLLM | 本地视觉模型推理引擎（二选一）|
 | Windows 10/11 | 当前支持的桌面平台 |
-| Qwen3.6:latest (推荐) | 35B MoE 模型，规划与视觉同时使用一个模型，避免在多模型间反复切换导致 30+ 秒冷加载延迟 |
+| Qwen3.8-Flash（推荐） | 本地轻量视觉模型，规划与视觉可同时使用，避免多模型冷加载延迟 |
+| DeepSeek-V4-Flash-Vision-Exp（可选） | 更强的视觉理解/元素定位能力，适合复杂界面与图标识别 |
 
 ### 风险与缓解
 

@@ -40,7 +40,7 @@ Natural Language → TaskPlanner → TaskExecutor → Monitor → Docs/Scripts/R
                               (Local vision model analyzes screenshots)
 ```
 
-### 4.2 Four-Tier Capability Model
+### 4.2 Three-Tier Capability Model
 
 ```
 Skill Generation (foundation)
@@ -104,7 +104,41 @@ Post-exploration:
 - Generate a complete system usage guide
 - Compile into a Skill for efficient use in subsequent task mode
 
-### 4.3 AI Agent Integration
+### 4.3 Operation Backends
+
+RegionCUA supports multiple operation backends, split into "base capture backends" and "CUA execution backends":
+
+#### Base Backend: Foreground / Background (`--backend`)
+
+| Backend | Capture | Action | Steals Cursor | Obscured / Locked |
+|---------|---------|--------|---------------|-------------------|
+| `foreground` (default) | pyautogui full-screen | pyautogui mouse/keyboard | Yes | Fails |
+| `background` | PrintWindow per-window | UIA / PostMessage | **No** | **Still works** |
+
+The background mode borrows the core idea of trycua/cua — the agent operates applications in the background without disturbing the user. It uses the Win32 PrintWindow API to capture the target window (even when obscured) and UI Automation / PostMessage to click and type (without moving the real mouse).
+
+#### CUA Execution Backend (`--cua-backend`)
+
+The benchmark (`region-cua bench`) and unified execution path support pluggable CUA execution backends, switched through the unified `cua/factory.py` interface:
+
+| Backend | Locating | Executing | Notes |
+|---------|----------|-----------|-------|
+| `trycua` | **UIA control-tree text matching** (structured, stable, no VLM) | cua-driver (PostMessage background, no cursor steal) | Alibaba cua-driver CLI adapter; control-tree first, pixel/VLM fallback |
+| `qwen-ui` | **VLM looks at the screenshot and outputs coordinates** (Qwen-UI-Agent grounding) | reuses cua-driver (same executor as trycua) | end-to-end VLM locating; Ollama ROCm GPU-accelerated vision |
+
+```bash
+# Benchmark with a specific CUA execution backend
+uv run region-cua bench --all --cua-backend trycua
+uv run region-cua bench --all --cua-backend qwen-ui
+```
+
+The two CUA backends differ only in the "vision locating" strategy — trycua uses the UIA control tree (structured, stable), qwen-ui uses VLM grounding (end-to-end visual locating); they share the same cua-driver executor so A/B benchmarks keep execution identical.
+
+#### Vision Fallback Chain
+
+Locating order: **OmniParser (YOLO+OCR text matching) → EasyOCR raw-text precise locating → CUA backend UIA / VLM → region-ai cloud VLM fallback**. Text targets prefer OmniParser+EasyOCR (measured most accurate); icons/non-text targets use SAM3 segmentation or VLM. Pixel-determinable attributes such as colors use deterministic RGB matching rather than the vision model.
+
+### 4.4 AI Agent Integration
 
 RegionCUA provides a `region-cua` Skill. Agents auto-detect and install it when reading this repository, after which they can execute desktop automation through natural language conversation:
 
@@ -116,7 +150,7 @@ RegionCUA provides a `region-cua` Skill. Agents auto-detect and install it when 
 
 After installation, users describe tasks in natural language and the agent automatically invokes RegionCUA to complete them.
 
-### 4.4 Skill Auto-Install Manifest
+### 4.5 Skill Auto-Install Manifest
 
 The following metadata is used by agents for auto-discovery and registration:
 
@@ -138,7 +172,7 @@ install:
     git clone https://github.com/Region-AI/region-cua.git
     cd region-cua
     uv sync
-  model: ollama pull qwen3.6:latest
+  model: ollama pull qwen3.8-flash:latest
 ```
 
 ## 5. Quick Start
@@ -156,10 +190,14 @@ uv sync
 
 # Option A: Ollama (default)
 ollama serve
-ollama pull qwen3.6:latest
+# Recommended vision models (choose one):
+#   qwen3.8-flash                 - lightweight local vision, fast, daily tasks
+#   deepseek-v4-flash-vision-exp  - stronger vision for complex UIs
+ollama pull qwen3.8-flash:latest
+# ollama pull deepseek-v4-flash-vision-exp:latest
 
 # Option B: vLLM (OpenAI-compatible API)
-vllm serve qwen3.6:latest --port 8000
+vllm serve qwen3.8-flash:latest --port 8000
 
 # 4. Run
 uv run region-cua run "Open Calculator and compute 1024 times 768"
@@ -231,7 +269,7 @@ uv run region-cua run "Create a sales spreadsheet in Excel" --dry-run
 ### 6.7 Specify Model
 
 ```bash
-uv run region-cua run "Describe current desktop" --model minicpm-v
+uv run region-cua run "Describe current desktop" --model qwen3.8-flash:latest
 ```
 
 ### 6.8 Disable Recording
@@ -324,7 +362,7 @@ outputs/{timestamp}_learn_{app_name_or_multi}/
 
 - **Cross-platform support** — Currently Windows only (macOS/Linux in future releases)
 - **Model training** — No model training or fine-tuning involved
-- **Cloud inference** — All inference runs locally via Ollama, no cloud API dependency
+- **Cloud inference** — Main flow runs locally via Ollama; only when local vision locating fails, an optional region-ai cloud VLM fallback is used (`qwen3.x-27b`, requires `REGION_AI_API_KEY`)
 - **Mobile support** — No Android/iOS plans at this time
 
 ## 9. Dependencies & Risks
@@ -337,7 +375,8 @@ outputs/{timestamp}_learn_{app_name_or_multi}/
 | uv | Dependency management & runner (`pip install uv`) |
 | Ollama **or** vLLM | Local vision model inference engine (choose one) |
 | Windows 10/11 | Currently supported desktop platform |
-| Qwen3.6:latest (recommended) | 35B MoE model; planning and vision share one model to avoid 30s+ cold-start latency from model switching |
+| Qwen3.8-Flash (recommended) | Lightweight local vision model; planning and vision can share one model to avoid cold-start latency |
+| DeepSeek-V4-Flash-Vision-Exp (optional) | Stronger vision understanding/element locating for complex UIs and icon recognition |
 
 ### Risks & Mitigations
 
