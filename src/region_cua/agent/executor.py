@@ -503,6 +503,34 @@ class TaskExecutor:
             elem = self._omniparser.find_element(elements, target_desc, screenshot_path)
             if elem:
                 cx, cy = elem["center"]
+                # ⚠️ OmniParser YOLO bbox 对文字按钮会偏（实测 click-button Submit 定位偏 230px，
+                #    点到相邻 OK 按钮）→ 用 EasyOCR raw 文字精确定位覆盖。
+                #    EasyOCR bbox 实测最准（fill-form/select-dropdown 已验证）。
+                try:
+                    import numpy as _np
+                    from PIL import Image as _PILImg
+                    import easyocr as _eocr
+
+                    img = _np.array(_PILImg.open(screenshot_path).convert("RGB"))
+                    _rdr = self._omniparser._get_easyocr_reader() if hasattr(self._omniparser, "_get_easyocr_reader") else None
+                    if _rdr is None:
+                        _rdr = _eocr.Reader(["en"], gpu=False, verbose=False)
+                    results = _rdr.readtext(img, detail=1)
+                    _desc = target_desc.lower().strip()
+                    _best, _best_conf = None, 0.0
+                    for _box, _txt, _conf in results:
+                        _tl = _txt.lower().strip()
+                        if _conf > 0.3 and (_desc in _tl or _tl in _desc or _desc.replace(" ", "") == _tl.replace(" ", "")):
+                            _x1, _y1 = _box[0]; _x2, _y2 = _box[2]
+                            _score = _conf + (0.2 if _desc.replace(" ", "") == _tl.replace(" ", "") else 0)
+                            if _score > _best_conf:
+                                _best_conf = _score
+                                _best = (int((_x1 + _x2) / 2), int((_y1 + _y2) / 2))
+                    if _best:
+                        cx, cy = _best
+                        self.logger.info(f"EasyOCR 精确定位: ({cx},{cy}) ← 覆盖 OmniParser")
+                except Exception:
+                    pass
                 if elem.get("bbox"):
                     bx1, by1, bx2, by2 = elem["bbox"]
                     h = by2 - by1

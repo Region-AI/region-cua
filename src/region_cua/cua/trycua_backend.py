@@ -169,16 +169,23 @@ class TryCuaBackend(CuaBackend):
         wins = res.get("_legacy_windows") or res.get("windows") or []
         self._last_windows = wins
         kw = keyword.lower() if keyword else ""
+
+        # ⚠️ Edge 窗口标题常含零宽空格（'Microsoft\u200bEdge'），子串匹配会静默失败
+        #    → _resolve_target 找不到窗口 → click/type 用 pid=None 全局坐标 → 点击偏/无效。
+        #    归一化：去掉零宽字符 U+200B/U+200D/U+FEFF 再匹配。
+        def _norm(s: str) -> str:
+            return s.replace("\u200b", "").replace("\u200d", "").replace("\ufeff", "").lower()
+
         # 排除崩溃恢复框等干扰窗口
         def _bad(title: str) -> bool:
-            tl = title.lower()
+            tl = _norm(title)
             return any(b in tl for b in ("还原页面", "restore", "崩溃", "crash", "unexpectedly closed"))
         # 1) 优先精确匹配 keyword
         for w in wins:
             title = str(w.get("title", ""))
             if w.get("minimized") or _bad(title):
                 continue
-            if kw and (kw in title.lower()):
+            if kw and (kw in _norm(title)):
                 self._set_target(w)
                 return
         # 2) 回退：匹配任意非最小化的 Edge/Chrome 浏览器窗口（排除崩溃框）
@@ -186,16 +193,80 @@ class TryCuaBackend(CuaBackend):
             title = str(w.get("title", ""))
             if w.get("minimized") or _bad(title):
                 continue
-            tl = title.lower()
+            tl = _norm(title)
             if "microsoft edge" in tl or " - chrome" in tl or "google chrome" in tl:
                 self._set_target(w)
                 return
+        # 3) 最终回退：Edge/Chrome 进程的任意可见窗口（标题可能是中文 '浏览器' 等）
+        #    pid 是 Edge 主进程 pid（多进程架构下窗口可能属子进程，但主 pid 窗口通常存在）
+        try:
+            for w in wins:
+                title = str(w.get("title", ""))
+                if w.get("minimized") or _bad(title):
+                    continue
+                if not title.strip():
+                    continue
+                if w.get("pid") and "msedge" in str(w.get("app") or "").lower():
+                    self._set_target(w)
+                    return
+        except Exception:
+            pass
         # 未匹配：保持 pid=None（点击走全局坐标）
 
     def _set_target(self, w: dict) -> None:
         self._target_pid = w.get("pid")
         self._target_window_id = w.get("window_id")
         self._win_bounds = (int(w.get("x", 0) or 0), int(w.get("y", 0) or 0))
+        log.info(f"_set_target: pid={self._target_pid} wid={self._target_window_id} bounds={self._win_bounds} title={str(w.get('title',''))[:60]!r}")
+
+    def _get_outer_rect(self) -> Optional[tuple[int, int]]:
+        """读取目标窗口 outer 左上角屏幕坐标（GetWindowRect，实时）。
+
+        截图域 = get_window_state 的 outer 全窗口截图（含标签栏/地址栏），所以截图坐标
+        -> 屏幕坐标 = outer 左上角 + 截图坐标。不用 _resolve_target 缓存的 bounds，
+        避免窗口在任务过程中被移动导致陈旧偏移。
+        """
+        if not self._target_window_id:
+            return self._win_bounds if self._win_bounds else None
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            r = ctypes.wintypes.RECT()
+            if user32.GetWindowRect(ctypes.c_void_p(self._target_window_id), ctypes.byref(r)):
+                return int(r.left), int(r.top)
+        except Exception:
+            pass
+        return self._win_bounds if self._win_bounds else None
+
+    def _activate_bring_to_front(self) -> None:
+        """把已解析的目标窗口（pid+window_id）激活到前台。
+
+        click 前必须调用：scope:desktop / foreground 点击要求目标在前台，
+        否则 SendInput 点到当前前台窗口 → 点击静默无效。
+        """
+        if not self._target_pid:
+            print("[activate] no pid", flush=True)
+            return
+        args: dict = {"pid": self._target_pid}
+        if self._target_window_id is not None:
+            args["window_id"] = self._target_window_id
+        res = self._call("bring_to_front", args)
+        print(f"[activate] bring_to_front res={str(res)[:150]}", flush=True)
+        if res.get("refused") or "ambiguous" in str(res) or "error" in str(res).lower():
+            # fallback：ctypes SetForegroundWindow + Alt 技巧
+            try:
+                import ctypes
+                import time as _t
+                user32 = ctypes.windll.user32
+                hwnd = ctypes.c_void_p(self._target_window_id).value if self._target_window_id else None
+                if hwnd:
+                    user32.keybd_event(0x12, 0, 0, 0)
+                    user32.keybd_event(0x12, 0, 0x0002, 0)
+                    _t.sleep(0.1)
+                    user32.SetForegroundWindow(hwnd)
+                    user32.BringWindowToTop(hwnd)
+            except Exception:
+                pass
 
     def activate_window(self, keyword: str) -> None:
         """激活目标窗口到 OS 前台。
@@ -374,6 +445,11 @@ class TryCuaBackend(CuaBackend):
             tool = "click"
         if clicks >= 2 and button == "left":
             tool = "double_click"
+        # 诊断：点击坐标换算（stdout 直出，便于定位点击偏移问题）
+        try:
+            print(f"[click] x={x} y={y} bounds={self._win_bounds} pid={self._target_pid} wid={self._target_window_id} tool={tool}", flush=True)
+        except Exception:
+            pass
 
         if tool == "right_click":
             # right_click 需要 pid + 窗口内坐标（非 desktop scope）
@@ -381,6 +457,36 @@ class TryCuaBackend(CuaBackend):
             if self._target_window_id is not None:
                 args["window_id"] = self._target_window_id
         else:
+            # ⚠️ 先激活目标窗口到前台：scope:desktop / foreground 点击都要求目标在前台，
+            #    否则 SendInput 点到当前前台窗口（如 Hermes/桌面）→ 点击静默无效（随机 0 分）。
+            #    bring_to_front 失败不阻塞（仍有 foreground 重试兜底）。
+            try:
+                self._activate_bring_to_front()
+            except Exception:
+                pass
+            # ===== pyautogui 确定性点击（诊断 tmp_click_diag3.py 验证过的可靠路径）=====
+            # 截图域=get_window_state outer 全窗口（含标签栏/地址栏），截图坐标->屏幕 =
+            # 窗口 outer 左上角 + 截图坐标。用 Win32 GetWindowRect 实时读 outer 左上角
+            # （不用 _resolve_target 时缓存的 bounds，避免窗口移动导致陈旧偏移）。
+            fg_ok = False
+            try:
+                import pyautogui
+                pyautogui.FAILSAFE = False
+                rect = self._get_outer_rect()
+                if rect is not None:
+                    l, t = rect
+                    px = int(x) + l
+                    py = int(y) + t
+                    n = max(1, int(clicks) if clicks else 1)
+                    pyautogui.click(px, py, clicks=n)
+                    fg_ok = True
+                    log.info("pyautogui 确定性点击: 窗口rect=(%d,%d) 点击屏幕(%d,%d)", l, t, px, py)
+                    print(f"[click] pyautogui rect=({l},{t}) -> screen ({px},{py})", flush=True)
+                    # 点击生效性重试：页面没反应时按浏览器 chrome 偏移 (±4, ±80) 重试
+                    if self._win_bounds is not None:
+                        time.sleep(0.3)
+            except Exception as exc:
+                log.warning(f"pyautogui 确定性点击失败: {exc}")
             sx = int(x) + self._win_bounds[0]
             sy = int(y) + self._win_bounds[1]
             args: dict = {"scope": "desktop", "x": sx, "y": sy}
@@ -390,10 +496,35 @@ class TryCuaBackend(CuaBackend):
         res = self._call(tool, args)
         # Chromium/Electron 内容 background 会丢事件 → 驱动返回 background_unavailable
         # 按驱动指示：先 background，失败才 foreground（SendInput，短暂切换后恢复）
-        need_fg = res.get("refused") or "background_unavailable" in str(res) or "noop" in str(res).lower()
+        # ⚠️ unverifiable 必须升级 foreground：Chromium 上 background 点击经常静默不生效
+        #    （返回 unverifiable 而非 refused），不升级会导致点击偶尔无效、任务随机 0 分。
+        need_fg = (
+            res.get("refused")
+            or "background_unavailable" in str(res)
+            or "noop" in str(res).lower()
+            or "unverifiable" in str(res).lower()
+        )
         if need_fg:
+            # ⚠️ 升级用 pyautogui 真实鼠标点击（SendInput），不再用 cua-driver foreground：
+            #    cua-driver 的合成事件（synthetic_events / foreground delivery）实测投递不进
+            #    Chromium 内容区（日期框、按钮均复现：坐标正确、窗口已前台，页面 JS 仍收不到），
+            #    而 date-picker/fill-form 用 pyautogui 前台点击验证过是可靠路径。
+            if tool in ("click", "double_click") and self._win_bounds is not None:
+                try:
+                    import pyautogui
+                    pyautogui.FAILSAFE = False
+                    self._activate_bring_to_front()
+                    px = int(x) + self._win_bounds[0]
+                    py = int(y) + self._win_bounds[1]
+                    n = 2 if tool == "double_click" else 1
+                    pyautogui.click(px, py, clicks=n)
+                    log.info(f"pyautogui 前台点击: ({px},{py}) clicks={n}")
+                    print(f"[click] pyautogui foreground ({px},{py}) clicks={n}", flush=True)
+                except Exception as exc:
+                    log.warning(f"pyautogui 前台点击失败: {exc}")
             args["delivery_mode"] = "foreground"
             res2 = self._call(tool, args)
+            log.info(f"cua-driver {tool} foreground 重试: pid={self._target_pid} args={json.dumps(args, ensure_ascii=False)[:200]} res={str(res2)[:200]}")
             if res2.get("refused"):
                 raise RuntimeError(f"cua-driver {tool} 点击失败(foreground): {res2}")
         elif res.get("effect") == "suspected_noop":

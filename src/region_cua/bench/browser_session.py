@@ -167,6 +167,7 @@ class BrowserSession:
         import shutil
 
         opened = False
+        self._browser_pid: Optional[int] = None
         # 尝试用 msedge --new-window 强制开新窗口
         edge_paths = [
             shutil.which("msedge"),
@@ -176,11 +177,12 @@ class BrowserSession:
         for ep in edge_paths:
             if ep and Path(ep).exists():
                 try:
-                    subprocess.Popen(
+                    proc = subprocess.Popen(
                         [ep, "--new-window", "--no-default-browser-check", url],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                     )
+                    self._browser_pid = proc.pid
                     opened = True
                     break
                 except Exception:
@@ -357,24 +359,43 @@ class BrowserSession:
 
         user32.EnumWindows(_enum, 0)
         if not results:
-            # Debug dump ALL windows so we know what's really on screen
-            dbg = []
-            @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
-            def _dbg(hwnd, _):
-                ln = user32.GetWindowTextLengthW(hwnd)
-                if ln > 5:
-                    buf = ctypes.create_unicode_buffer(ln + 1)
-                    user32.GetWindowTextW(hwnd, buf, ln + 1)
-                    dbg.append(f"  {buf.value!r}")
-                return True
-            user32.EnumWindows(_dbg, 0)
-            try:
-                with open(r"C:\Users\zjycas\AppData\Local\Temp\bench_debug.txt", 'a') as _f:
-                    _f.write(f"_find_window FAILED: self.title={self.title!r}\nAll windows:\n")
-                    for d in dbg[:30]:
-                        _f.write(d + "\n")
-            except Exception:
-                pass
+            # ⚠️ 标题匹配失败（中文系统 Edge 窗口标题可能是 '浏览器' 而非任务名）：
+            #    用浏览器进程 pid 匹配（EnumWindows + GetWindowThreadProcessId），
+            #    不依赖 document.title 是否被观察器改成任务名。
+            browser_pid = getattr(self, "_browser_pid", None)
+            if browser_pid:
+                pid_matches: list[int] = []
+                _pid = ctypes.c_ulong()
+                @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+                def _enum_pid(hwnd, _lparam):
+                    if not user32.IsWindowVisible(hwnd):
+                        return True
+                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(_pid))
+                    if _pid.value == browser_pid:
+                        pid_matches.append(hwnd)
+                    return True
+                user32.EnumWindows(_enum_pid, 0)
+                if pid_matches:
+                    results = pid_matches
+            if not results:
+                # Debug dump ALL windows so we know what's really on screen
+                dbg = []
+                @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+                def _dbg(hwnd, _):
+                    ln = user32.GetWindowTextLengthW(hwnd)
+                    if ln > 5:
+                        buf = ctypes.create_unicode_buffer(ln + 1)
+                        user32.GetWindowTextW(hwnd, buf, ln + 1)
+                        dbg.append(f"  {buf.value!r}")
+                    return True
+                user32.EnumWindows(_dbg, 0)
+                try:
+                    with open(r"C:\Users\zjycas\AppData\Local\Temp\bench_debug.txt", 'a') as _f:
+                        _f.write(f"_find_window FAILED: self.title={self.title!r} pid={browser_pid}\nAll windows:\n")
+                        for d in dbg[:30]:
+                            _f.write(d + "\n")
+                except Exception:
+                    pass
         # 优先返回含 BENCH_DONE 的窗口（评分阶段），其次页面文件名，最后原标题
         for _h in results:
             if "BENCH_DONE" in _get_window_text(_h):
