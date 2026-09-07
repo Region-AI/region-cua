@@ -110,20 +110,19 @@ RegionCUA 提供三个递进的能力层次，底层能力向上支撑：
 
 RegionCUA 提供**三套执行实现**，通过 `--backend` / `--cua-backend` 选择。三者在「截图→定位→操作」全链路上互相独立，可 A/B 对比：
 
-| 实现 | 截图 | 定位 | 执行 | 抢光标 | 被遮挡/锁屏 |
-|------|------|------|------|--------|------------|
-| **自研（foreground）** | pyautogui 全屏 | OmniParser → EasyOCR → VLM（公共定位链） | pyautogui 真实鼠标键盘 | 是 | 失效 |
-| **自研（background）** | Win32 PrintWindow 截窗口 | 同上（公共定位链） | UIA / PostMessage 后台 | **否** | **仍可工作** |
-| **trycua** | cua-driver `get_window_state` 截窗口（pid+window_id） | **UIA 控件树文本匹配** + 像素/VLM 兜底 | cua-driver PostMessage 后台 | **否** | **仍可工作** |
-| **qwen-ui** | 同 trycua（复用执行手） | **VLM grounding**（端到端看截图输出坐标） | 同 trycua（cua-driver） | **否** | **仍可工作** |
+| 实现 | 截图 | 定位 | 执行 |
+|------|------|------|------|
+| **自研** | pyautogui 全屏 或 PrintWindow 截窗口（自动选择：有目标窗口走后台截图，否则全屏） | OmniParser → EasyOCR 精修 → VLM/SAM3 兜底 | pyautogui 真实鼠标键盘（前台）或 UIA/PostMessage（后台） |
+| **trycua** | cua-driver `get_window_state` 截窗口（pid+window_id） | **UIA 控件树文本匹配** + 像素/VLM 兜底 | cua-driver PostMessage 后台 |
+| **qwen-ui** | 同 trycua（复用执行手） | **VLM grounding**（端到端看截图输出坐标） | 同 trycua（cua-driver） |
 
-> 注：`foreground` / `background` 是**自研实现**内部的两种截图/输入模式（是否抢光标），不是独立后端；trycua / qwen-ui 是接入外部 CUA 驱动的两套完整实现。
+> 注：三套实现共享「视觉回退链」定位概念，但**各自独立完整**——自研不依赖任何外部驱动；trycua / qwen-ui 是接入外部 CUA 驱动的两套完整实现。截图/执行是否抢光标由自研内部是否启用后台模式决定，不是独立后端。
 
 ```bash
-# 自研：前台（默认，抢光标）
+# 自研（默认）
 uv run region-cua run "打开记事本写一段文字"
 
-# 自研：后台（不抢光标，被遮挡可工作）
+# 自研后台模式（不抢光标、被遮挡可工作）
 uv run region-cua run "打开记事本写一段文字" --backend background
 
 # CUA 后端（基准测试常用）
@@ -132,13 +131,13 @@ uv run region-cua bench --all --cua-backend qwen-ui
 ```
 
 **三套实现的差异定位**：
-- **自研**：不依赖任何外部驱动，定位走公共链（OmniParser+EasyOCR 实测最准），执行走 pyautogui / Win32 UIA+PostMessage；foreground 简单可靠但抢光标，background 后台不打扰但 PrintWindow 对 Chromium 内容可能截空（bench 已规避）。
+- **自研**：截图自动选择（目标窗口→PrintWindow 后台，否则全屏），定位走公共链（OmniParser 文字识别 + EasyOCR 精修中心点，实测最准），执行 pyautogui 前台 / Win32 UIA+PostMessage 后台。
 - **trycua**：UIA 控件树结构化定位最稳（不依赖视觉模型），执行走 cua-driver 后台 PostMessage；适合控件密集的桌面/网页应用。Chromium 内容后台点击偶发不生效时自动升级 pyautogui 前台兜底。
 - **qwen-ui**：纯视觉端到端定位（适合无 UIA 控件树的环境），执行复用 cua-driver，与 trycua 保持同一执行手，保证 A/B 评测只差定位策略。
 
 #### 视觉回退链
 
-定位顺序：**OmniParser（YOLO+OCR 文字匹配）→ EasyOCR raw 文字精确定位 → CUA 后端 UIA / VLM → region-ai 云端 VLM 兜底**。文字类目标优先 OmniParser+EasyOCR（实测最准），图标/无文字目标走 SAM3 分割或 VLM。颜色等可像素判定的属性用确定性 RGB 匹配，不交给视觉模型。
+定位统一按「**OmniParser 文字识别（YOLO 框 + 内置 EasyOCR）→ EasyOCR raw 文字精修中心点 → VLM / SAM3 兜底**」执行。文字类目标靠前两级即可命中且坐标最准（fill-form/select-dropdown 实测）；图标/无文字目标（如点击图标、颜色块）走 SAM3 分割或 VLM；颜色等可像素判定的属性用确定性 RGB 匹配，不交给视觉模型。
 
 ### 4.4 AI Agent 集成
 

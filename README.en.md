@@ -108,20 +108,19 @@ Post-exploration:
 
 RegionCUA provides **three execution implementations**, selected via `--backend` / `--cua-backend`. They are fully independent across the "capture → locate → act" chain, enabling A/B comparison:
 
-| Implementation | Capture | Locate | Act | Steals Cursor | Obscured / Locked |
-|----------------|---------|--------|-----|---------------|-------------------|
-| **Built-in (foreground)** | pyautogui full-screen | OmniParser → EasyOCR → VLM (shared locating chain) | pyautogui real mouse/keyboard | Yes | Fails |
-| **Built-in (background)** | Win32 PrintWindow per-window | same (shared locating chain) | UIA / PostMessage background | **No** | **Still works** |
-| **trycua** | cua-driver `get_window_state` (pid+window_id) | **UIA control-tree text matching** + pixel/VLM fallback | cua-driver PostMessage background | **No** | **Still works** |
-| **qwen-ui** | same as trycua (reuses its executor) | **VLM grounding** (end-to-end screenshot → coordinates) | same as trycua (cua-driver) | **No** | **Still works** |
+| Implementation | Capture | Locate | Act |
+|----------------|---------|--------|-----|
+| **Built-in** | pyautogui full-screen or PrintWindow per-window (auto: target window → background capture, else full-screen) | OmniParser → EasyOCR refinement → VLM/SAM3 fallback | pyautogui real mouse/keyboard (foreground) or UIA/PostMessage (background) |
+| **trycua** | cua-driver `get_window_state` (pid+window_id) | **UIA control-tree text matching** + pixel/VLM fallback | cua-driver PostMessage background |
+| **qwen-ui** | same as trycua (reuses its executor) | **VLM grounding** (end-to-end screenshot → coordinates) | same as trycua (cua-driver) |
 
-> Note: `foreground` / `background` are the **two capture/input modes inside the built-in implementation** (whether they steal the cursor) — not independent backends. trycua / qwen-ui are two complete implementations backed by external CUA drivers.
+> Note: the three implementations share the "vision fallback chain" concept but are **each fully self-contained** — the built-in one depends on no external driver; trycua / qwen-ui are two complete implementations backed by external CUA drivers. Whether the built-in steals the cursor is decided by its internal background mode, not a separate backend.
 
 ```bash
-# Built-in: foreground (default, steals cursor)
+# Built-in (default)
 uv run region-cua run "Write a paragraph in Notepad"
 
-# Built-in: background (no cursor steal, works when obscured)
+# Built-in background mode (no cursor steal, works when obscured)
 uv run region-cua run "Write a paragraph in Notepad" --backend background
 
 # CUA backends (commonly used in benchmarks)
@@ -130,13 +129,13 @@ uv run region-cua bench --all --cua-backend qwen-ui
 ```
 
 **How the three differ**:
-- **Built-in**: no external driver dependency; locating uses the shared chain (OmniParser+EasyOCR measured most accurate); acting uses pyautogui / Win32 UIA+PostMessage. Foreground is simple and reliable but steals the cursor; background doesn't disturb the user but PrintWindow may capture Chromium content blank (mitigated in bench).
+- **Built-in**: capture auto-selects (target window → PrintWindow background, else full-screen); locating uses the shared chain (OmniParser text recognition + EasyOCR center refinement, measured most accurate); acting uses pyautogui foreground / Win32 UIA+PostMessage background.
 - **trycua**: UIA control-tree locating is the most stable (no vision model needed); acting uses cua-driver background PostMessage; suited for control-dense desktop/web apps. When Chromium content ignores background clicks, it auto-escalates to pyautogui foreground fallback.
 - **qwen-ui**: pure end-to-end visual locating (for environments without a UIA control tree); acting reuses cua-driver, keeping the same executor as trycua so A/B benchmarks differ only in the locating strategy.
 
 #### Vision Fallback Chain
 
-Locating order: **OmniParser (YOLO+OCR text matching) → EasyOCR raw-text precise locating → CUA backend UIA / VLM → region-ai cloud VLM fallback**. Text targets prefer OmniParser+EasyOCR (measured most accurate); icons/non-text targets use SAM3 segmentation or VLM. Pixel-determinable attributes such as colors use deterministic RGB matching rather than the vision model.
+Locating always follows: **OmniParser text recognition (YOLO boxes + built-in EasyOCR) → EasyOCR raw-text center refinement → VLM / SAM3 fallback**. Text targets are hit by the first two stages with the most accurate coordinates (verified on fill-form/select-dropdown); icon/non-text targets (clicking icons, color swatches) use SAM3 segmentation or VLM; pixel-determinable attributes such as colors use deterministic RGB matching rather than the vision model.
 
 ### 4.4 AI Agent Integration
 
