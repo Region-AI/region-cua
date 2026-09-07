@@ -359,7 +359,7 @@ outputs/{timestamp}_learn_{app_name_or_multi}/
 
 ## 8. Out of Scope
 
-- **Cross-platform support** — Currently Windows only (macOS/Linux in future releases)
+- **Cross-platform support (progressive)** — Foreground operations (pyautogui) and the capture dispatch layer are cross-platform; Windows exclusively has PrintWindow background capture + UIA/PostMessage background input. Linux (X11) captures windows with `xwd`, macOS with `screencapture -l` (screen-recording permission required); on Wayland native sessions background capture degrades to full-screen (see `automation/capture_platform.py`)
 - **Model training** — No model training or fine-tuning involved
 - **Cloud inference** — Main flow runs locally via Ollama; only when local vision locating fails, an optional region-ai cloud VLM fallback is used (`qwen3.x-27b`, requires `REGION_AI_API_KEY`)
 - **Mobile support** — No Android/iOS plans at this time
@@ -373,7 +373,9 @@ outputs/{timestamp}_learn_{app_name_or_multi}/
 | Python 3.11+ | Runtime environment |
 | uv | Dependency management & runner (`pip install uv`) |
 | Ollama **or** vLLM | Local vision model inference engine (choose one) |
-| Windows 10/11 | Currently supported desktop platform |
+| Windows 10/11 | Full support (PrintWindow background capture + UIA background input) |
+| Linux X11 (optional) | `wmctrl` + `xwd` for background window capture (`apt install wmctrl x11-apps`); Wayland native sessions degrade to full-screen |
+| macOS (optional) | `screencapture -l` for window capture (screen-recording permission on first use) |
 | Qwen3.8-Flash (recommended) | Lightweight local vision model; planning and vision can share one model to avoid cold-start latency |
 | DeepSeek-V4-Flash-Vision-Exp (optional) | Stronger vision understanding/element locating for complex UIs and icon recognition |
 

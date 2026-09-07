@@ -421,7 +421,7 @@ outputs/{时间戳}_学习_{app名或multi}/
 
 ## 8. 不在范围内
 
-- **跨平台支持** — 当前仅支持 Windows（macOS/Linux 后续版本）
+- **跨平台支持（渐进）** — 前台操作（pyautogui）与截图分派层跨平台；Windows 独享 PrintWindow 后台截图 + UIA/PostMessage 后台输入。Linux（X11）用 `xwd` 截窗口、macOS 用 `screencapture -l` 截窗口（需录屏权限），Wayland 原生会话下后台截图降级为全屏（详见 `automation/capture_platform.py`）
 - **端侧模型训练** — 不涉及模型训练或微调
 - **默认本地推理** — 主流程在本地 Ollama 完成；仅当本地视觉定位失败时可选走 region-ai 云端 VLM 兜底（`qwen3.x-27b`，需设置 `REGION_AI_API_KEY`）
 - **移动端支持** — 暂无 Android/iOS 计划
@@ -435,7 +435,9 @@ outputs/{时间戳}_学习_{app名或multi}/
 | Python 3.11+ | 运行环境 |
 | uv | 依赖管理与运行（`pip install uv`，无需 poetry）|
 | Ollama **或** vLLM | 本地视觉模型推理引擎（二选一）|
-| Windows 10/11 | 当前支持的桌面平台 |
+| Windows 10/11 | 完整支持（PrintWindow 后台截图 + UIA 后台输入）|
+| Linux X11（可选） | `wmctrl` + `xwd` 后台截窗口（`apt install wmctrl x11-apps`）；Wayland 原生会话降级全屏 |
+| macOS（可选） | `screencapture -l` 截窗口（首次需屏幕录制权限）|
 | Qwen3.8-Flash（推荐） | 本地轻量视觉模型，规划与视觉可同时使用，避免多模型冷加载延迟 |
 | DeepSeek-V4-Flash-Vision-Exp（可选） | 更强的视觉理解/元素定位能力，适合复杂界面与图标识别 |
 

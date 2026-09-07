@@ -55,10 +55,11 @@ def capture_screen():
 def capture_window_bg(keyword: str):
     """后台截图：截取标题包含 keyword 的窗口，即使被遮挡。
 
-    返回 PIL.Image.Image，找不到窗口返回 None。
+    跨平台分派：Windows=PrintWindow，Linux=X11 xwd，macOS=screencapture -l。
+    返回 PIL.Image.Image，找不到窗口或平台不支持返回 None。
     """
     try:
-        from ..automation.bg_capture import capture_window_by_title
+        from ..automation.capture_platform import capture_window_by_title
         return capture_window_by_title(keyword)
     except Exception:
         return None
